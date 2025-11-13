@@ -1,12 +1,84 @@
 {
   "tickets": [
-    { "id": "1", "description": "Bug in Login-Seite beheben" },
-    { "id": "2", "description": "Dashboard UI verbessern" },
-    { "id": "3", "description": "Authentifizierung implementieren" },
-    { "id": "4", "description": "Fehlerbehandlung hinzufügen" },
-    { "id": "5", "description": "API-Dokumentation schreiben" },
-    { "id": "6", "description": "Performance optimieren" },
-    { "id": "7", "description": "Sicherheitslücken beheben" },
-    { "id": "8", "description": "Unit Tests schreiben" }
+    {
+      "id": "1",
+      "subject": "Störung im Umspannwerks-Monitoring",
+      "description": "Das SCADA-System zeigt seit 21:50 keine aktuellen Messwerte für die Station Laufenburg an. Die betroffenen Sensoren liefern laut Netzwerkdiagnose keine Datenpakete mehr. Erste Überprüfung der Kommunikationsmodule ergab keine Hardwarefehler. Die Leitwarte meldet, dass der letzte gültige Datensatz um 21:48 empfangen wurde. Auch der lokale Datenlogger zeigt keine Aktivität. Es wird vermutet, dass ein Verbindungsproblem zwischen der RTU und dem Hauptserver besteht. Mehrere Versuche, den Dienst neu zu starten, blieben erfolglos. Eine Eskalation an den Netzwerkadministrator wurde eingeleitet.",
+      "solution": "Die Ursache lag in einem fehlerhaften VPN-Tunnel zwischen der Station und dem zentralen Rechenzentrum. Nach einer Neuinitialisierung der VPN-Verbindung und einer Anpassung der Firewall-Regel wurde die Kommunikation wiederhergestellt. Anschließend wurde ein Monitoring-Alert eingerichtet, der künftige Paketverluste automatisch erkennt.",
+      "creation": "09.11.2025 22:07:56",
+      "priority": "Critical",
+      "status": "open",
+      "department": "Netzwerktechnik"
+    },
+    {
+      "id": "2",
+      "subject": "Leistungsdiagramm aktualisiert sich nicht",
+      "description": "Im Energy Portal werden die Live-Diagramme für Netzfrequenz und Spannung nicht mehr automatisch aktualisiert. Mehrere Nutzer berichten, dass sie manuell neu laden müssen, um aktuelle Werte zu sehen. Der Fehler tritt unabhängig vom Browser auf. In den Logs ist zu erkennen, dass die WebSocket-Verbindung nach etwa 30 Sekunden getrennt wird. Das Backend zeigt keine Fehlermeldungen, jedoch wurde vor kurzem ein Update der Frontend-Komponenten durchgeführt. Wahrscheinlich wurde eine Abhängigkeit zur Echtzeitbibliothek nicht korrekt übernommen. Der Fehler konnte auf mehreren Testsystemen reproduziert werden. Ein Hotfix wurde vorbereitet, um die automatische Aktualisierung wiederherzustellen.",
+      "solution": "Das Problem wurde durch ein inkompatibles JavaScript-Modul verursacht, das nach dem letzten Frontend-Update nicht mehr mit der WebSocket-Schnittstelle harmonierte. Nach einem Rollback auf die vorherige Bibliotheksversion und einer Anpassung der Client-Timeout-Einstellungen konnte der Live-Update-Prozess wieder aktiviert werden.",
+      "creation": "10.11.2025 08:14:23",
+      "priority": "High",
+      "status": "open",
+      "department": "Softwareentwicklung"
+    },
+    {
+      "id": "3",
+      "subject": "Benutzer kann sich nicht am Asset Management Tool anmelden",
+      "description": "Ein Servicetechniker meldet, dass er sich nicht mehr im Asset Management Tool anmelden kann, obwohl seine Zugangsdaten korrekt sind. Nach Überprüfung im Active Directory wurde festgestellt, dass das Konto aktiv ist und keine Sperre vorliegt. Die Serverlogs zeigen jedoch Authentifizierungsfehler im Zusammenhang mit einem veralteten Token-Mechanismus. Dieser wurde im letzten Sicherheitsupdate ersetzt. Vermutlich wurde der lokale Cache des Benutzers nicht automatisch geleert. Ein weiterer Benutzer berichtete von einem ähnlichen Problem. Daher wird angenommen, dass es sich um einen systemweiten Fehler nach dem letzten Update handelt. Der Benutzer konnte dadurch nicht auf notwendige Wartungsdaten zugreifen.",
+      "solution": "Das Problem wurde durch abgelaufene Authentifizierungstokens im Client-Cache verursacht. Nach einem erzwungenen Cache-Reset über die Administrator-Konsole konnten alle betroffenen Benutzer wieder auf das System zugreifen. Zusätzlich wurde ein Skript implementiert, das alte Tokens automatisch löscht, sobald eine neue Sicherheitsversion ausgerollt wird.",
+      "creation": "10.11.2025 13:32:41",
+      "priority": "Low",
+      "status": "open",
+      "department": "IT-Support"
+    },
+    {
+      "id": "4",
+      "subject": "Alarmmeldungen doppelt im System",
+      "description": "Seit dem letzten Software-Update werden bestimmte Alarmmeldungen doppelt im System angezeigt. Dies betrifft vor allem Spannungsausfälle und Temperaturwarnungen in der Station Wettingen. Erste Analysen zeigen, dass die MQTT-Schnittstelle dieselben Nachrichten zweimal an das Backend übermittelt. Der Verdacht liegt nahe, dass eine redundante Verbindung aktiv ist, die ebenfalls Alarme sendet. Im Backend wurden keine Filtermechanismen implementiert, um doppelte IDs zu erkennen. Die Doppelmeldungen führen zu unnötigen Eskalationen im Leitstand. Das Problem wurde mit Priorität Hoch eingestuft, da es die Reaktionszeiten des Teams beeinträchtigt.",
+      "solution": "Nach Prüfung wurde festgestellt, dass ein zweiter MQTT-Client versehentlich parallel registriert war. Durch Entfernen der redundanten Subscription und Implementierung eines Duplikatsfilters im Backend konnte das Problem vollständig gelöst werden. Zusätzlich wurde ein Alarmvalidierungsprozess hinzugefügt, der doppelte Events automatisch verwirft.",
+      "creation": "11.11.2025 09:02:17",
+      "priority": "High",
+      "status": "open",
+      "department": "Systemintegration"
+    },
+    {
+      "id": "5",
+      "subject": "API für Leistungsdaten liefert keine Werte",
+      "description": "Die interne REST-API für Leistungsdaten (`/power/metrics`) liefert seit gestern keine Datensätze mehr. Ein Zugriff auf andere Endpunkte funktioniert jedoch problemlos. Das Log zeigt eine SQL-Fehlermeldung bezüglich einer leeren Ergebnismenge. Die Datenbank wurde vor zwei Tagen gewartet, möglicherweise wurde dabei ein View entfernt oder verändert. Mehrere Dashboards zeigen seither nur noch Nullwerte an. Der API-Server selbst läuft stabil und ohne sichtbare Fehler. Tests im Staging-System ergaben denselben Effekt. Das Problem wurde an das Data Engineering Team weitergeleitet.",
+      "solution": "Die Ursache war ein fehlerhaftes Datenbank-View, das nach der Wartung nicht korrekt neu erstellt wurde. Nach einer Wiederherstellung des Views aus dem Backup und Anpassung der Zugriffsrechte konnte die API wieder vollständige Datensätze liefern. Ein automatischer Integritätstest wurde eingerichtet, um ähnliche Fehler zukünftig sofort zu erkennen.",
+      "creation": "11.11.2025 11:50:11",
+      "priority": "High",
+      "status": "open",
+      "department": "Data Engineering"
+    },
+    {
+      "id": "6",
+      "subject": "Langsame Antwortzeiten im Grid Management System",
+      "description": "Mehrere Standorte meldeten stark verzögerte Reaktionszeiten beim Zugriff auf das Grid Management Dashboard. Während einige Module normal laden, benötigen andere bis zu 30 Sekunden. Eine Netzwerkanalyse ergab sporadische Latenzspitzen zwischen Zürich und Baden. Gleichzeitig wurde festgestellt, dass das System erhöhte CPU-Auslastung auf dem Hauptserver zeigt. Verdacht auf ineffiziente Abfragen nach dem letzten Datenbank-Update. Der Load-Balancer verteilt den Traffic derzeit ungleichmäßig. Benutzer berichten, dass die Verzögerungen vor allem in den Spitzenzeiten auftreten. Eine Performance-Messung wurde gestartet, um Engpässe zu identifizieren.",
+      "solution": "Die Ursache lag in einer nicht optimierten SQL-Abfrage im Modul zur Netzlastprognose. Nach Hinzufügen eines Index und Optimierung der Datenbankabfrage sank die durchschnittliche Antwortzeit von 28 auf 3 Sekunden. Zusätzlich wurde der Load-Balancer neu konfiguriert, um die Last besser zu verteilen.",
+      "creation": "12.11.2025 15:27:44",
+      "priority": "High",
+      "status": "open",
+      "department": "System Performance"
+    },
+    {
+      "id": "7",
+      "subject": "Firmware-Update auf RTU-Geräten schlägt fehl",
+      "description": "Beim Versuch, die neue Firmware-Version 4.2.7 auf mehreren RTU500-Geräten einzuspielen, tritt ein Timeout-Fehler auf. Das Update bricht nach etwa 40 % ab. Erste Analysen zeigen, dass die Geräte zwar erreichbar sind, aber die Übertragungsgeschwindigkeit stark schwankt. Auch ein manuelles Update über die lokale Schnittstelle war nicht erfolgreich. Das Problem trat gleichzeitig an mehreren Standorten auf. Es wird vermutet, dass der Update-Prozess aufgrund einer fehlerhaften Paketvalidierung abbricht. Betroffene Geräte bleiben funktional, aber mit älterer Firmware-Version. Eine Eskalation an den Gerätehersteller wurde initiiert.",
+      "solution": "Das Problem wurde durch ein unvollständiges Firmware-Paket verursacht, das bei der Bereitstellung beschädigt wurde. Nach erneuter Verteilung der korrekten Datei und Anpassung des Timeout-Werts in der Update-Routine konnten alle RTUs erfolgreich aktualisiert werden. Der Verteilungsprozess wurde anschließend automatisiert, um Prüfsummen künftig vor dem Rollout zu verifizieren.",
+      "creation": "12.11.2025 17:12:09",
+      "priority": "Critical",
+      "status": "open",
+      "department": "Gerätemanagement"
+    },
+    {
+      "id": "8",
+      "subject": "Falsche Temperaturwerte aus Sensorfeld Süd",
+      "description": "Im Sensorfeld Süd werden seit heute früh auffällig hohe Temperaturwerte übermittelt. Die Werte liegen zwischen 115°C und 130°C, was technisch nicht plausibel ist. Die Hardwarediagnose zeigt jedoch keine Fehler an. Es besteht der Verdacht auf eine fehlerhafte Kalibrierung oder Störung in der Signalverarbeitung. Ein Vergleich mit historischen Daten zeigt, dass die Abweichung abrupt aufgetreten ist. Andere Sensorfelder senden weiterhin korrekte Messwerte. Eine Überprüfung des Multiplexers wurde eingeleitet. Das Problem betrifft derzeit 7 Sensoren, die für das Monitoring des Transformators T-17 relevant sind.",
+      "solution": "Nach Untersuchung wurde festgestellt, dass ein defektes Analog-Digital-Modul falsche Werte generierte. Nach Austausch des Moduls und einer Neukalibrierung der betroffenen Sensoren wurden die Messwerte wieder korrekt erfasst. Zusätzlich wurde ein Grenzwert-Alarm implementiert, um unplausible Daten künftig automatisch zu erkennen.",
+      "creation": "13.11.2025 11:03:33",
+      "priority": "High",
+      "status": "open",
+      "department": "Sensorik & Feldtechnik"
+    }
   ]
 }
