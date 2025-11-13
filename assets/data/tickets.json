@@ -1,0 +1,12 @@
+{
+  "tickets": [
+    { "id": "1", "description": "Bug in Login-Seite beheben" },
+    { "id": "2", "description": "Dashboard UI verbessern" },
+    { "id": "3", "description": "Authentifizierung implementieren" },
+    { "id": "4", "description": "Fehlerbehandlung hinzufügen" },
+    { "id": "5", "description": "API-Dokumentation schreiben" },
+    { "id": "6", "description": "Performance optimieren" },
+    { "id": "7", "description": "Sicherheitslücken beheben" },
+    { "id": "8", "description": "Unit Tests schreiben" }
+  ]
+}
