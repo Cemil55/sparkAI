@@ -1,56 +1,100 @@
-const API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY || "";
+const SPARK_AI_ENDPOINT =
+  "https://fhnwbai-fw-team-b.hf.space/api/v1/prediction/c7f98eac-66ad-47e7-a0ab-2d17e73a4fe5";
 
-if (!API_KEY) {
-  console.warn("⚠️ GEMINI API Key nicht gesetzt! Bitte .env Datei konfigurieren.");
-}
-
-export const callGeminiAPI = async (ticketDescription: string): Promise<string> => {
-  if (!API_KEY) {
-    throw new Error("Gemini API Key fehlt. Bitte .env prüfen.");
-  }
-
+export const callSparkAI = async (ticketDescription: string): Promise<string> => {
   try {
-    const prompt = `Du bist ein technischer Support-Agent. Deine Aufgabe ist es, AUSSCHLIESSLICH Lösungsvorschläge für das folgende Problem zu geben.
+    const payload = {
+      question: ticketDescription.trim(),
+    };
 
-Gib nur konkrete, praktische Lösungsschritte an - KEINE Erklärungen, KEINE Fragen, KEINE Problemanalyse.
-
-Ticketbeschreibung: ${ticketDescription}
-
-Lösungsvorschläge:`;
-
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${API_KEY}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                {
-                  text: prompt,
-                },
-              ],
-            },
-          ],
-        }),
-      }
-    );
+    const response = await fetch(SPARK_AI_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
 
     if (!response.ok) {
-      throw new Error(`API Error: ${response.status}`);
+      const errorBody = await response.text();
+      throw new Error(`Spark AI API Error ${response.status}: ${errorBody}`);
     }
 
     const data = await response.json();
-    const text =
-      data.candidates?.[0]?.content?.parts?.[0]?.text ||
-      "Keine Antwort erhalten";
 
-    return text;
+    const visited = new WeakSet<object>();
+    const collectText = (node: unknown, depth = 0): string[] => {
+      if (node === null || node === undefined) {
+        return [];
+      }
+      if (typeof node === "string") {
+        return node.trim().length > 0 ? [node.trim()] : [];
+      }
+      if (typeof node === "number" || typeof node === "boolean") {
+        return [String(node)];
+      }
+      if (Array.isArray(node)) {
+        if (depth > 5) {
+          return [];
+        }
+        return node.flatMap((item) => collectText(item, depth + 1));
+      }
+      if (typeof node === "object") {
+        if (visited.has(node as object) || depth > 5) {
+          return [];
+        }
+        visited.add(node as object);
+        const candidateKeys = [
+          "text",
+          "value",
+          "answer",
+          "output",
+          "response",
+          "message",
+          "content",
+          "generated_text",
+          "generatedText",
+          "data",
+        ];
+
+        const collected: string[] = [];
+        candidateKeys.forEach((key) => {
+          if (Object.prototype.hasOwnProperty.call(node, key)) {
+            collected.push(...collectText((node as Record<string, unknown>)[key], depth + 1));
+          }
+        });
+
+        if (collected.length === 0) {
+          Object.values(node as Record<string, unknown>).forEach((value) => {
+            collected.push(...collectText(value, depth + 1));
+          });
+        }
+
+        return collected;
+      }
+
+      return [];
+    };
+
+    const extractedSegments = collectText(data);
+    const uniqueSegments = Array.from(new Set(extractedSegments)).filter((segment) => segment.length > 0);
+
+    if (uniqueSegments.length > 0) {
+      return uniqueSegments.join("\n\n");
+    }
+
+    if (typeof data === "string" && data.trim().length > 0) {
+      return data.trim();
+    }
+
+    try {
+      return JSON.stringify(data, null, 2);
+    } catch (jsonError) {
+      console.warn("Spark AI Antwort konnte nicht interpretiert werden:", jsonError);
+      return "Keine Antwort erhalten";
+    }
   } catch (error) {
-    console.error("Gemini API Error:", error);
-    throw error;
+    console.error("Spark AI Space Error:", error);
+    throw error instanceof Error ? error : new Error(String(error));
   }
 };

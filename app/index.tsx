@@ -2,7 +2,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Image, ScrollView, Text, TextInput, TouchableOpacity, View, type StyleProp, type ViewStyle } from "react-native";
 import { useTicketData } from "../hooks/useTicketData";
-import { callGeminiAPI } from "../services/geminiService";
+import { callSparkAI } from "../services/geminiService";
 
 export default function Index() {
   const [ticketId, setTicketId] = useState("");
@@ -47,7 +47,11 @@ export default function Index() {
     setLoadingDots("...");
 
     try {
-      const response = await callGeminiAPI(description);
+      const ticketContext = currentTicket
+        ? `Ticket-ID: ${currentTicket.id}\nBetreff: ${currentTicket.subject || "Unbekannt"}\nProdukt: ${currentTicket.product || "Unbekannt"}\nBeschreibung: ${description}`
+        : description;
+
+      const response = await callSparkAI(ticketContext);
       setLlmResponse(response);
     } catch (err) {
       setLlmResponse(`Fehler: ${err}`);
@@ -162,7 +166,11 @@ export default function Index() {
           {/* Linke Seite */}
           <View style={{ flex: 1 }}>
             <Text style={{ fontSize: 11, color: "#999", marginBottom: 8 }}>
-              Eröffnet am {currentTicket?.creation || ""}
+              {currentTicket?.creation
+                ? `Eröffnet am ${currentTicket.creation}`
+                : currentTicket?.product
+                ? `Produkt: ${currentTicket.product}`
+                : ""}
             </Text>
             
             {/* Betreff und Status/Prio auf gleicher Höhe */}

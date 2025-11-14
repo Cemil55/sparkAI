@@ -1,84 +1,138 @@
 {
   "tickets": [
-    {
-      "id": "1",
-      "subject": "Störung im Umspannwerks-Monitoring",
-      "description": "Das SCADA-System zeigt seit 21:50 keine aktuellen Messwerte für die Station Laufenburg an. Die betroffenen Sensoren liefern laut Netzwerkdiagnose keine Datenpakete mehr. Erste Überprüfung der Kommunikationsmodule ergab keine Hardwarefehler. Die Leitwarte meldet, dass der letzte gültige Datensatz um 21:48 empfangen wurde. Auch der lokale Datenlogger zeigt keine Aktivität. Es wird vermutet, dass ein Verbindungsproblem zwischen der RTU und dem Hauptserver besteht. Mehrere Versuche, den Dienst neu zu starten, blieben erfolglos. Eine Eskalation an den Netzwerkadministrator wurde eingeleitet.",
-      "solution": "Die Ursache lag in einem fehlerhaften VPN-Tunnel zwischen der Station und dem zentralen Rechenzentrum. Nach einer Neuinitialisierung der VPN-Verbindung und einer Anpassung der Firewall-Regel wurde die Kommunikation wiederhergestellt. Anschließend wurde ein Monitoring-Alert eingerichtet, der künftige Paketverluste automatisch erkennt.",
-      "creation": "09.11.2025 22:07:56",
-      "priority": "Critical",
-      "status": "open",
-      "department": "Netzwerktechnik"
-    },
-    {
-      "id": "2",
-      "subject": "Leistungsdiagramm aktualisiert sich nicht",
-      "description": "Im Energy Portal werden die Live-Diagramme für Netzfrequenz und Spannung nicht mehr automatisch aktualisiert. Mehrere Nutzer berichten, dass sie manuell neu laden müssen, um aktuelle Werte zu sehen. Der Fehler tritt unabhängig vom Browser auf. In den Logs ist zu erkennen, dass die WebSocket-Verbindung nach etwa 30 Sekunden getrennt wird. Das Backend zeigt keine Fehlermeldungen, jedoch wurde vor kurzem ein Update der Frontend-Komponenten durchgeführt. Wahrscheinlich wurde eine Abhängigkeit zur Echtzeitbibliothek nicht korrekt übernommen. Der Fehler konnte auf mehreren Testsystemen reproduziert werden. Ein Hotfix wurde vorbereitet, um die automatische Aktualisierung wiederherzustellen.",
-      "solution": "Das Problem wurde durch ein inkompatibles JavaScript-Modul verursacht, das nach dem letzten Frontend-Update nicht mehr mit der WebSocket-Schnittstelle harmonierte. Nach einem Rollback auf die vorherige Bibliotheksversion und einer Anpassung der Client-Timeout-Einstellungen konnte der Live-Update-Prozess wieder aktiviert werden.",
-      "creation": "10.11.2025 08:14:23",
-      "priority": "High",
-      "status": "open",
-      "department": "Softwareentwicklung"
-    },
-    {
-      "id": "3",
-      "subject": "Benutzer kann sich nicht am Asset Management Tool anmelden",
-      "description": "Ein Servicetechniker meldet, dass er sich nicht mehr im Asset Management Tool anmelden kann, obwohl seine Zugangsdaten korrekt sind. Nach Überprüfung im Active Directory wurde festgestellt, dass das Konto aktiv ist und keine Sperre vorliegt. Die Serverlogs zeigen jedoch Authentifizierungsfehler im Zusammenhang mit einem veralteten Token-Mechanismus. Dieser wurde im letzten Sicherheitsupdate ersetzt. Vermutlich wurde der lokale Cache des Benutzers nicht automatisch geleert. Ein weiterer Benutzer berichtete von einem ähnlichen Problem. Daher wird angenommen, dass es sich um einen systemweiten Fehler nach dem letzten Update handelt. Der Benutzer konnte dadurch nicht auf notwendige Wartungsdaten zugreifen.",
-      "solution": "Das Problem wurde durch abgelaufene Authentifizierungstokens im Client-Cache verursacht. Nach einem erzwungenen Cache-Reset über die Administrator-Konsole konnten alle betroffenen Benutzer wieder auf das System zugreifen. Zusätzlich wurde ein Skript implementiert, das alte Tokens automatisch löscht, sobald eine neue Sicherheitsversion ausgerollt wird.",
-      "creation": "10.11.2025 13:32:41",
-      "priority": "Low",
-      "status": "open",
-      "department": "IT-Support"
-    },
-    {
-      "id": "4",
-      "subject": "Alarmmeldungen doppelt im System",
-      "description": "Seit dem letzten Software-Update werden bestimmte Alarmmeldungen doppelt im System angezeigt. Dies betrifft vor allem Spannungsausfälle und Temperaturwarnungen in der Station Wettingen. Erste Analysen zeigen, dass die MQTT-Schnittstelle dieselben Nachrichten zweimal an das Backend übermittelt. Der Verdacht liegt nahe, dass eine redundante Verbindung aktiv ist, die ebenfalls Alarme sendet. Im Backend wurden keine Filtermechanismen implementiert, um doppelte IDs zu erkennen. Die Doppelmeldungen führen zu unnötigen Eskalationen im Leitstand. Das Problem wurde mit Priorität Hoch eingestuft, da es die Reaktionszeiten des Teams beeinträchtigt.",
-      "solution": "Nach Prüfung wurde festgestellt, dass ein zweiter MQTT-Client versehentlich parallel registriert war. Durch Entfernen der redundanten Subscription und Implementierung eines Duplikatsfilters im Backend konnte das Problem vollständig gelöst werden. Zusätzlich wurde ein Alarmvalidierungsprozess hinzugefügt, der doppelte Events automatisch verwirft.",
-      "creation": "11.11.2025 09:02:17",
-      "priority": "High",
-      "status": "open",
-      "department": "Systemintegration"
-    },
-    {
-      "id": "5",
-      "subject": "API für Leistungsdaten liefert keine Werte",
-      "description": "Die interne REST-API für Leistungsdaten (`/power/metrics`) liefert seit gestern keine Datensätze mehr. Ein Zugriff auf andere Endpunkte funktioniert jedoch problemlos. Das Log zeigt eine SQL-Fehlermeldung bezüglich einer leeren Ergebnismenge. Die Datenbank wurde vor zwei Tagen gewartet, möglicherweise wurde dabei ein View entfernt oder verändert. Mehrere Dashboards zeigen seither nur noch Nullwerte an. Der API-Server selbst läuft stabil und ohne sichtbare Fehler. Tests im Staging-System ergaben denselben Effekt. Das Problem wurde an das Data Engineering Team weitergeleitet.",
-      "solution": "Die Ursache war ein fehlerhaftes Datenbank-View, das nach der Wartung nicht korrekt neu erstellt wurde. Nach einer Wiederherstellung des Views aus dem Backup und Anpassung der Zugriffsrechte konnte die API wieder vollständige Datensätze liefern. Ein automatischer Integritätstest wurde eingerichtet, um ähnliche Fehler zukünftig sofort zu erkennen.",
-      "creation": "11.11.2025 11:50:11",
-      "priority": "High",
-      "status": "open",
-      "department": "Data Engineering"
-    },
-    {
-      "id": "6",
-      "subject": "Langsame Antwortzeiten im Grid Management System",
-      "description": "Mehrere Standorte meldeten stark verzögerte Reaktionszeiten beim Zugriff auf das Grid Management Dashboard. Während einige Module normal laden, benötigen andere bis zu 30 Sekunden. Eine Netzwerkanalyse ergab sporadische Latenzspitzen zwischen Zürich und Baden. Gleichzeitig wurde festgestellt, dass das System erhöhte CPU-Auslastung auf dem Hauptserver zeigt. Verdacht auf ineffiziente Abfragen nach dem letzten Datenbank-Update. Der Load-Balancer verteilt den Traffic derzeit ungleichmäßig. Benutzer berichten, dass die Verzögerungen vor allem in den Spitzenzeiten auftreten. Eine Performance-Messung wurde gestartet, um Engpässe zu identifizieren.",
-      "solution": "Die Ursache lag in einer nicht optimierten SQL-Abfrage im Modul zur Netzlastprognose. Nach Hinzufügen eines Index und Optimierung der Datenbankabfrage sank die durchschnittliche Antwortzeit von 28 auf 3 Sekunden. Zusätzlich wurde der Load-Balancer neu konfiguriert, um die Last besser zu verteilen.",
-      "creation": "12.11.2025 15:27:44",
-      "priority": "High",
-      "status": "open",
-      "department": "System Performance"
-    },
-    {
-      "id": "7",
-      "subject": "Firmware-Update auf RTU-Geräten schlägt fehl",
-      "description": "Beim Versuch, die neue Firmware-Version 4.2.7 auf mehreren RTU500-Geräten einzuspielen, tritt ein Timeout-Fehler auf. Das Update bricht nach etwa 40 % ab. Erste Analysen zeigen, dass die Geräte zwar erreichbar sind, aber die Übertragungsgeschwindigkeit stark schwankt. Auch ein manuelles Update über die lokale Schnittstelle war nicht erfolgreich. Das Problem trat gleichzeitig an mehreren Standorten auf. Es wird vermutet, dass der Update-Prozess aufgrund einer fehlerhaften Paketvalidierung abbricht. Betroffene Geräte bleiben funktional, aber mit älterer Firmware-Version. Eine Eskalation an den Gerätehersteller wurde initiiert.",
-      "solution": "Das Problem wurde durch ein unvollständiges Firmware-Paket verursacht, das bei der Bereitstellung beschädigt wurde. Nach erneuter Verteilung der korrekten Datei und Anpassung des Timeout-Werts in der Update-Routine konnten alle RTUs erfolgreich aktualisiert werden. Der Verteilungsprozess wurde anschließend automatisiert, um Prüfsummen künftig vor dem Rollout zu verifizieren.",
-      "creation": "12.11.2025 17:12:09",
-      "priority": "Critical",
-      "status": "open",
-      "department": "Gerätemanagement"
-    },
-    {
-      "id": "8",
-      "subject": "Falsche Temperaturwerte aus Sensorfeld Süd",
-      "description": "Im Sensorfeld Süd werden seit heute früh auffällig hohe Temperaturwerte übermittelt. Die Werte liegen zwischen 115°C und 130°C, was technisch nicht plausibel ist. Die Hardwarediagnose zeigt jedoch keine Fehler an. Es besteht der Verdacht auf eine fehlerhafte Kalibrierung oder Störung in der Signalverarbeitung. Ein Vergleich mit historischen Daten zeigt, dass die Abweichung abrupt aufgetreten ist. Andere Sensorfelder senden weiterhin korrekte Messwerte. Eine Überprüfung des Multiplexers wurde eingeleitet. Das Problem betrifft derzeit 7 Sensoren, die für das Monitoring des Transformators T-17 relevant sind.",
-      "solution": "Nach Untersuchung wurde festgestellt, dass ein defektes Analog-Digital-Modul falsche Werte generierte. Nach Austausch des Moduls und einer Neukalibrierung der betroffenen Sensoren wurden die Messwerte wieder korrekt erfasst. Zusätzlich wurde ein Grenzwert-Alarm implementiert, um unplausible Daten künftig automatisch zu erkennen.",
-      "creation": "13.11.2025 11:03:33",
-      "priority": "High",
-      "status": "open",
-      "department": "Sensorik & Feldtechnik"
-    }
-  ]
+  {
+    "Case Number": "20200521-5022024",
+    "Product": "FOX515",
+    "Subject": "FOX515 Sync information cannot be retrieved from node via NMS Sync-Map",
+    "Case Description": "In the Bahrain NMS the upload of the SDH Synchronization information from the Sync map fails for 3 nodes. For all other nodes it is working as expected. As a result the Sync map is not properly shown because the links are missing due to these 3 stations and it is displayed as multiple islands. However one can see that the origin of some islands are deriving their clocking signal from these nodes. If connected to the node with UCST the sync information can be uploaded as expected and is also selected as expected (no loop). During some reconfigurations recentyl done on IP and OSPF areas of these nodes the COBUX have been restarted but the problem is still existing in these nodes. Also they have been removed from the NMS and added to a new Elementr Agent but without success.",
+    "Case Resolution Description": "Case can be closed after discussion with local service engineer."
+  },
+  {
+    "Case Number": "20200521-5169476",
+    "Product": "FOX515",
+    "Subject": "FOX515 SYN4E \"AU-AIS\"",
+    "Case Description": "Beim Fox Kommunikationssystem kommt eine Fehlermeldung. Der Text lautet Server Signal State \"AU-AIS\". Der Alarm erscheint jedoch gibt es keine Störung. Herr Kleemann von der EWZ bittet Do.11.04. um Rückruf.",
+    "Case Resolution Description": "No solution due to FOX515 life cycle"
+  },
+  {
+    "Case Number": "20200521-5169543",
+    "Product": "FOXMAN-UN",
+    "Subject": "FOXMAN-UN TCP session handling",
+    "Case Description": "After call with CKW it is more clear. The previous attached Firewall log is showing TCP flows which are denied because the TCP sessions are not done correctly. If the TCP flow is not as per standard (e.g. in case the server tries to establish a TCP session which is already established), the statefull Firewall is detecting that and blocking it. So if the server and nodes are establishing the connections according to the TCP standard, no issue. ABB to look in to the behaviour of FOXMAN-UN / DIRAC to analyze why the TCP flow is not repected in all cases. A statefull Firwal, like in CKW is detecting this, blocking it and alerting the user.",
+    "Case Resolution Description": "R&D informed fix is available on R17A"
+  },
+  {
+    "Case Number": "20200619-5201729",
+    "Product": "FOX615",
+    "Subject": "ESW System upgrade SAMO5 procedure with two short interruptions fails",
+    "Case Description": "Yesterday I tried to perform the SAMO5 EQP esw system upgrade from esw R4A16 to R4B06 and it fails multiple times. I followed the procedure with two small 50 ms interruptions because that is the way we want to do esw system upgrades in the future. I managed to reproduce the fault and it appears that, after the successful upgrade of the standby SAMO5 and the manual switch from working to protecting SAMO5 unit, the procedure fails just before performing the last step. Just after you pressed the Save to NE button followed by the start software button for the upgrade of the working SAMO5 towards R4B06, you often get suddenly the alarm ?incompatible software mismatch?. The traffic which is running on that moment over de SDH ports on the working unit is interrupted. The causes an outage for a very long time because in order to resolve you need to do a ?Start in boot? for the working SAMO5 after which you can select the correct software to start. Btw I did manage to do at least one successful upgrade also. Have the impression that when the time between you do a ?Save to NE? and the ?Start upgrade? is too big, that has something to do with this fault. Anyway this shouldn?t happening and we need to trust 100% on working procedures certainly if traffic interruption is no option. I took a video of the manipulations I did during the SAMO5 upgrade which was done according the written procedure. I saved all the necessary files from the node and I will upload this to a new issue log.",
+    "Case Resolution Description": "Feedback ELIA by 11.10.2023: Since this is an older esw release, there is no need to redo this upgrade as we are currently on a higher esw software than r4b06. Therefore this ticket can be closed"
+  },
+  {
+    "Case Number": "20210611-5328445",
+    "Product": "FOXMAN-UN",
+    "Subject": "SNC in Networking package but not on node-can't be deleted",
+    "Case Description": "There is an SNC in the Networking Package that is not on the node and cannot be deleted.  Cross connect is not on the Node but cannot be removed from the Manager. The SNC is in Saggart HS #2 and is called Alarm Mgmt Maynooth 1-Derriron We have tried an NP resynch and a NP resynch-f to no avail",
+    "Case Resolution Description": ""
+  },
+  {
+    "Case Number": "20210618-5330084",
+    "Product": "FOXMAN-UN",
+    "Subject": "ENP: no confirmation when deleting a service",
+    "Case Description": "When using ENP (R14A), and selecting a service (VPWS or VPLS), with right-mouse click when by mistake users clicks on to delete the service, there is no confirmation requested to avoid wrong clicks. Can this somehow be activated? If not, can this be implemented?",
+    "Case Resolution Description": "pop-up already present"
+  },
+  {
+    "Case Number": "20210625-5331720",
+    "Product": "UNEM",
+    "Subject": "UNEM GBT NP out of synch",
+    "Case Description": "UNEM1 ERWE und UNEM2 BOWT NP out of synch  SBB Ticket TT668988 Abgesprochen mit Andrè Bemsel",
+    "Case Resolution Description": "npresynch on unem1 and unem2 executed"
+  },
+  {
+    "Case Number": "20210629-5332282",
+    "Product": "FOX615",
+    "Subject": "AMO EOS port- Intermittendly failing",
+    "Case Description": "Previous ticket logged for intermittently failing EOS port which has reoccurred. Closed ticket ref 20200521-5012026. Please investigate",
+    "Case Resolution Description": "Differential Delay changed to reset GFP synchronisation"
+  },
+  {
+    "Case Number": "20210701-5333029",
+    "Product": "FOX615",
+    "Subject": "max bandwidth of TDM mgmt ports on 615",
+    "Case Description": "What is the maximum bandwidth of all TDM mgmt ports together on a 615 mux?  We have a node that has 7 x P12 links and 3 x 192k links on one of our 615 muxes and we now only have limited bandwidth remaining. Can the default bandwidth be increased? Thanks",
+    "Case Resolution Description": ""
+  },
+  {
+    "Case Number": "20210702-5333244",
+    "Product": "MileGate 2300",
+    "Subject": "Keymile MileGate 2300",
+    "Case Description": "wir hatten gestern einen Stromausfall.  Wahrscheindlich hat die Software nicht mehr richtig aufgestartet. Die 2 MB Leitung funktioniert nicht mehr. Der Standort ist in Hohtenn. Können Sie das kontrollieren? Gruss Björn Raduner 079 665 63 45 BLS Netz AG Holen Sie sich Outlook für Android ",
+    "Case Resolution Description": "resolved by customer"
+  },
+  {
+    "Case Number": "20210711-5334949",
+    "Product": "UNEM - R14A",
+    "Subject": "Job collection are created, but cntr_g826 table not filled.",
+    "Case Description": "Hi,  After a power cut at the end of June, \"PM collection\" are recreated but the PMs are no longer collected in the PM_DATABASE (the last ones collected are from before the power cut). Best regards SALIHA",
+    "Case Resolution Description": "UNEM server is not accessible. I will recreate case as soon as the engineer is available and on site again Best Regards SALIHA"
+  },
+  {
+    "Case Number": "20210712-5335163",
+    "Product": "FOXMAN-UN",
+    "Subject": "NMS and NP backups",
+    "Case Description": "Hi, There is a high focus on Cyber Security at present and thus on backing up config files and databases.It is my understanding that the node configs, NMS database and NP database are backed up automatically every night on our network but I'm not sure where they are saved. I know where the node configs are saved but can you please tell me the location of the NMS and NP backups? If these are not backed up automatically can you advise on how we set this up?  Thanks",
+    "Case Resolution Description": ""
+  },
+  {
+    "Case Number": "20210730-5339110",
+    "Product": "FOXMAN-UN",
+    "Subject": "FOXMAN-UN: VC4 not discovered",
+    "Case Description": "Local VC4 cross-connections are made in NORDL150TS1/ZANDV380TS1.  I?m not able to find them back in NP. I did a ForcePolling, Agent in Suspend/Run without any success. I created similar local VC4 in other nodes, they were discovered automatically. I removed ? NORDL150TS1_8.1ZANDV380TSA? and recreate the VC4 ,now  the VC4 is visible in NP. I did not remove the other one ?ZANDV380TS1_8.1ZANDV380TSB?, maybe you can check  what?s going wrong? VC4- CrossConnections: ZANDV380TS1_8.1ZANDV380TSB NORDL150TS1_8.1ZANDV380TSA 2874 L2 checks: see attached file ",
+    "Case Resolution Description": "R15B improoved the behaviour. It was observed by ELIA for more then 6months. No issues appeared anymore."
+  },
+  {
+    "Case Number": "20210804-5339918",
+    "Product": "FOXMAN-UN",
+    "Subject": "Network browser: alarm NE -NMS not updated",
+    "Case Description": "ELIA: \"I believe we had launched a ticket in the past for sections that stays in orange color even after the problem was resolved. The ticket which was open is 20210520-5323485  ( previous ticket was 20201022-5224362) and following the information this would have been solved in R14B. Last week on 29/07/2021 we had again the situation (on the same link PETRO-ZUREN) whereby the alarm was nog clearing itself. I had to do a forced polling from both nodes 4 hours after resolving the problem, in order to clear the problem and change the orange color on the section to black. Can you re-investigate the problem and re-open the ticket 20210520-5323485 please? Please confirm! Thanks in advance\" 2875: The issue seams to be same as already had in 20201022-5224362. There it was intended to solve it with R14B. R14B is installed and still the alarm persists. ",
+    "Case Resolution Description": "The fix at that time was that in case this happens, you can do a force polling or Synchronise Alarm and the issue is gone."
+  },
+  {
+    "Case Number": "20210806-5340548",
+    "Product": "FOX615",
+    "Subject": "GRIMB150TP1 stays toggling even after applying cesun_r4a16_05 / cesne_r4a16_03",
+    "Case Description": "Toggling symptoms GRIMB150TP1: You can connect locally to the node as long as the node remains disconnected from our MPLS => no connections from CESM to the Elia routers. As soon as one CESM is connected to Elia router the node starts toggling. After a while you even cannot establish a connection via the local management port.  Things which has been done 06/08/2021 change both of the CESM1 slot 11 and slot 13 => same behavior with new CESM clear the database from both the new CESM and redo the complete configuration from the chassis => no change in behavior load the hotfix esw on both CESM boards cesun_r4a16_05 / cesne_r4a16_03 => no change in behavior Since the fact that support user is only available on the FOXCST version on installed on the Elia jumpserver,(R14B_05) and not possible to create a remote connection the trouble shooting logs cannot be pulled from the node. The FOXCST version available on our laptops to connect locally is R14A_08 and does not contain support user. The chassis will be disconnected from the site and transferred to our labo in Schaarbeek. But we are asking immediate help from ABB about the next steps to do.",
+    "Case Resolution Description": "maybe XCO issue."
+  },
+  {
+    "Case Number": "20210809-5340807",
+    "Product": "FOX615",
+    "Subject": "MALLE150TP1 SAMO issue",
+    "Case Description": "Issue on node MALLE150TP1 on 08/08/2021 01:20 - 01:50 Different alarms on node and neighbour node SJOB150TP1 as also others. In the events of the nod MALLE150TP1, I came across an error message 'unsolicited reset' on unit-6. Screenshot below. Coredump has been activated also on both SAMO boards in the node MALLE150TP1 Please investigate and provide explanation / solution.",
+    "Case Resolution Description": "Most likely you have faced a false positive oscillator issue. If you would agree with the case closure, this will not prevent you from opening a new one in case needed."
+  },
+  {
+    "Case Number": "20210813-5342173",
+    "Product": "FOX615",
+    "Subject": "OPIC2: vif-1/vif-2 behaviour",
+    "Case Description": "CKW has setup a redundant OPIC2 over MPLS-TP service. During testing of the redundancy, they see the following: 1. When disabling the 2nd path by admin-state down vif-2 --> vif-2 at remote end gets to alarm status. As well as cesop interface detects that protected path is not working 2. Enabling back the 2nd path --> all goes to green 3.  When disabling the 1st path by admin-state down vif-1 --> vif-1 and vif-2 at remote end gets to alarm status. As well as cesop interface detects that complete service is not working Investigation by 2875 (Marko) - Believe that OPIC2 does not like when user disables vif-1. - When instead of admin-state down vif-1, user changes the VLAN-ID, the service behaves as expected --> only 1st path is affected. 2nd path runs without problems. - When instead of admin-state down vif-1, user disables the PW, the service behaves as expected --> only 1st path is affected. 2nd path runs without problems. Question: - TEPI2 for example does not allow to admin-state down vif-1. Why does OPIC2 does not follow the same? - Is there a dependence on OPIC2, so that vif-1 must be on for a proper working?",
+    "Case Resolution Description": "new release implements a warning"
+  },
+  {
+    "Case Number": "20210817-5342936",
+    "Product": "FOXMAN-UN R10C",
+    "Subject": "FOXMAN E-NP R10C",
+    "Case Description": "Hello, There is a problem in the NMS OMAN (Salalah Region). It is FOXMAN R10C06_SP1f_PC2 and they are trying to create new MPLS-TP tunnels from E-NP (screenshot 1) but they have an error message (screenshot 2). I tried to help remotely but I am not able to understand the error, therefore I need expert assistance. Thanks in advance and best regards, Alejandro ",
+    "Case Resolution Description": "Someone else has either tunnel edit open.. or he is editing service which is using this tunnel. We do not allow to modify 2 services using the same tunnel at once.. or to modify the same tunnel by 2 users."
+  },
+
+  {
+    "Case Number": "20210817-5342999",
+    "Product": "",
+    "Subject": "",
+    "Case Description": "Server HW Requirements for 330 NEs. Was sind die Mindestanforderungen?",
+    "Case Resolution Description": ""
+  }
+]
 }
