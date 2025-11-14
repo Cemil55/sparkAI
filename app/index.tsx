@@ -36,6 +36,8 @@ export default function Index() {
     }
   };
 
+  const currentTicket = searchTicketId ? getTicketById(searchTicketId) : undefined;
+
   const handleSendToLLM = async () => {
     if (!description || description === "Ticket nicht gefunden") {
       alert("Bitte geben Sie zuerst eine gültige Ticket ID ein");
@@ -60,7 +62,6 @@ export default function Index() {
     }
   };
 
-  const currentTicket = searchTicketId ? getTicketById(searchTicketId) : undefined;
   const inputWrapperStyle: StyleProp<ViewStyle> = description
     ? { marginTop: 20, marginBottom: 20, alignItems: "center" }
     : { flex: 1, justifyContent: "center", alignItems: "center", marginBottom: 20 };
