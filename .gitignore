@@ -42,7 +42,6 @@ yarn-error.*
 *.tsbuildinfo
 
 app-example
-services/geminiService.ts
 
 # generated native folders
 /ios
