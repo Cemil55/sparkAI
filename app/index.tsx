@@ -3,12 +3,56 @@ import { useEffect, useState } from "react";
 import { ActivityIndicator, Image, ScrollView, Text, TextInput, TouchableOpacity, View, type StyleProp, type ViewStyle } from "react-native";
 import { useTicketData } from "../hooks/useTicketData";
 import { callSparkAI } from "../services/geminiService";
+import { predictPriority } from "../services/priorityService";
 
 export default function Index() {
+  type ChatMessage = {
+    sender: "user" | "ai";
+    message: string;
+  };
+
+  const normalizePriorityLabel = (value: string) => {
+    const trimmed = value?.trim().toLowerCase();
+
+    if (!trimmed) {
+      return "";
+    }
+
+    if (trimmed === "critical") return "Critical";
+    if (trimmed === "high") return "High";
+    if (trimmed === "medium") return "Medium";
+    if (trimmed === "low") return "Low";
+
+    return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+  };
+
+  const getPriorityColor = (value: string) => {
+    switch (value?.toLowerCase()) {
+      case "critical":
+        return "#C21B1B";
+      case "high":
+        return "#C21B1B";
+      case "medium":
+        return "#E8B931";
+      case "low":
+        return "#53A668";
+      default:
+        return "#757575";
+    }
+  };
+
   const [ticketId, setTicketId] = useState("");
   const [searchTicketId, setSearchTicketId] = useState("");
   const [description, setDescription] = useState("");
   const [llmResponse, setLlmResponse] = useState("");
+  const [userResponse, setUserResponse] = useState("");
+  const [sendingUserResponse, setSendingUserResponse] = useState(false);
+  const [conversation, setConversation] = useState<ChatMessage[]>([]);
+  const [predictedPriority, setPredictedPriority] = useState<string>("");
+  const [priorityConfidence, setPriorityConfidence] = useState<number | null>(null);
+  const [priorityLoading, setPriorityLoading] = useState(false);
+  const [priorityError, setPriorityError] = useState<string>("");
+  const [showPriority, setShowPriority] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingDots, setLoadingDots] = useState("...");
   const { tickets, loading: ticketsLoading, getTicketById, error } = useTicketData();
@@ -27,14 +71,37 @@ export default function Index() {
   const handleSearchTicket = () => {
     if (ticketId.trim()) {
       setLlmResponse("");
+      setUserResponse("");
       setLoadingDots("...");
+      setConversation([]);
+      setShowPriority(false);
+      setPredictedPriority("");
+      setPriorityConfidence(null);
+      setPriorityError("");
+      setPriorityLoading(false);
       setSearchTicketId(ticketId);
     } else {
       setSearchTicketId("");
       setDescription("");
       setLlmResponse("");
+      setUserResponse("");
+      setConversation([]);
+      setShowPriority(false);
+      setPredictedPriority("");
+      setPriorityConfidence(null);
+      setPriorityError("");
+      setPriorityLoading(false);
     }
   };
+
+  const buildConversationPrompt = (messages: ChatMessage[]) =>
+    messages
+      .map((entry) =>
+        entry.sender === "user"
+          ? `Nutzer: ${entry.message}`
+          : `SparkAI: ${entry.message}`
+      )
+      .join("\n\n");
 
   const currentTicket = searchTicketId ? getTicketById(searchTicketId) : undefined;
 
@@ -49,15 +116,106 @@ export default function Index() {
     setLoadingDots("...");
 
     try {
+      setPriorityLoading(true);
+      setPriorityError("");
+      setPredictedPriority("");
+      setPriorityConfidence(null);
+
       const ticketContext = currentTicket
         ? `Ticket-ID: ${currentTicket.id}\nBetreff: ${currentTicket.subject || "Unbekannt"}\nProdukt: ${currentTicket.product || "Unbekannt"}\nBeschreibung: ${description}`
         : description;
 
-      const response = await callSparkAI(ticketContext);
+      const initialConversation: ChatMessage[] = [
+        ...conversation,
+        { sender: "user" as const, message: ticketContext },
+      ];
+      setConversation(initialConversation);
+
+      let priorityPromise: Promise<void> | undefined;
+      if (currentTicket) {
+        const payload = {
+          "Case Description": description,
+          Product: currentTicket.product || "Unbekannt",
+          "Support Type":
+            (currentTicket.raw?.["Support Type"] as string) ||
+            (currentTicket as any)?.supportType ||
+            "Technical Support",
+          Status: currentTicket.status || "Open",
+        };
+
+        priorityPromise = predictPriority(payload)
+          .then((result) => {
+            const normalized = normalizePriorityLabel(result.priority);
+            setPredictedPriority(normalized);
+            setPriorityConfidence(
+              typeof result.confidence === "number" ? result.confidence : null
+            );
+          })
+          .catch((err) => {
+            console.warn("Priority Endpoint Fehler:", err);
+            setPredictedPriority("");
+            setPriorityConfidence(null);
+            setPriorityError(String(err));
+          })
+          .finally(() => {
+            setPriorityLoading(false);
+          });
+      } else {
+        setPriorityLoading(false);
+      }
+
+      const response = await callSparkAI(buildConversationPrompt(initialConversation));
+      const updatedConversation: ChatMessage[] = [
+        ...initialConversation,
+        { sender: "ai" as const, message: response },
+      ];
+      setConversation(updatedConversation);
       setLlmResponse(response);
+      setUserResponse("");
+
+      if (priorityPromise) {
+        await priorityPromise;
+      }
+      setShowPriority(Boolean(currentTicket));
     } catch (err) {
       setLlmResponse(`Fehler: ${err}`);
+      setPriorityLoading(false);
     } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSendUserResponse = async () => {
+    const trimmedResponse = userResponse.trim();
+    if (!trimmedResponse) {
+      alert("Bitte gib eine Antwort ein, bevor du sie sendest.");
+      return;
+    }
+
+    try {
+      setSendingUserResponse(true);
+      setLoading(true);
+      setLlmResponse("Spark AI verarbeitet deine Antwort");
+      setLoadingDots("...");
+
+      const nextConversation: ChatMessage[] = [
+        ...conversation,
+        { sender: "user" as const, message: trimmedResponse },
+      ];
+      setConversation(nextConversation);
+
+      const response = await callSparkAI(buildConversationPrompt(nextConversation));
+      const updatedConversation: ChatMessage[] = [
+        ...nextConversation,
+        { sender: "ai" as const, message: response },
+      ];
+      setConversation(updatedConversation);
+      setLlmResponse(response);
+      setUserResponse("");
+    } catch (error) {
+      setLlmResponse(`Fehler: ${error}`);
+    } finally {
+      setSendingUserResponse(false);
       setLoading(false);
     }
   };
@@ -65,7 +223,7 @@ export default function Index() {
   const inputWrapperStyle: StyleProp<ViewStyle> = description
     ? { marginTop: 20, marginBottom: 20, alignItems: "center" }
     : { flex: 1, justifyContent: "center", alignItems: "center", marginBottom: 20 };
-  const showRightBadges = Boolean(description && llmResponse && !loading);
+  const showRightBadges = Boolean(showPriority && description && llmResponse && !loading);
 
   useEffect(() => {
     if (!loading) {
@@ -86,6 +244,26 @@ export default function Index() {
 
     return () => clearInterval(interval);
   }, [loading]);
+
+  const priorityFromEndpoint = Boolean(predictedPriority);
+  const endpointColor = "#7C3AED";
+  const priorityBadgeColor = priorityFromEndpoint
+    ? getPriorityColor(predictedPriority) || endpointColor
+    : "#E5E7EB";
+  const priorityTextRaw = priorityFromEndpoint ? predictedPriority : "";
+  const priorityTextUpper = showPriority
+    ? priorityTextRaw
+      ? priorityTextRaw.toUpperCase()
+      : priorityLoading
+      ? "..."
+      : "--"
+    : "--";
+  const leftBadgeBackground = "#E5E7EB";
+  const leftTextColor = "#666";
+  const showPriorityConfidence =
+    showPriority && priorityFromEndpoint &&
+    typeof priorityConfidence === "number" &&
+    !Number.isNaN(priorityConfidence);
 
   return (
     <ScrollView style={{ flex: 1, padding: 20, backgroundColor: "#f5f5f5" }}>
@@ -193,20 +371,11 @@ export default function Index() {
                     paddingHorizontal: 12,
                     paddingVertical: 8,
                     borderRadius: 20,
-                    backgroundColor:
-                      currentTicket?.priority === "Critical"
-                        ? "#C21B1B"
-                        : currentTicket?.priority === "High"
-                        ? "#E0890E"
-                        : currentTicket?.priority === "Low"
-                        ? "#53A668"
-                        : "#757575",
+                    backgroundColor: leftBadgeBackground,
                   }}
                 >
-                  <Text style={{ fontSize: 12, fontWeight: "bold", color: "white" }}>Prio</Text>
-                  <Text style={{ fontSize: 12, fontWeight: "bold", color: "white" }}>
-                    {currentTicket?.priority?.toUpperCase() || ""}
-                  </Text>
+                  <Text style={{ fontSize: 12, fontWeight: "bold", color: leftTextColor }}>Prio</Text>
+                  <Text style={{ fontSize: 12, fontWeight: "bold", color: leftTextColor }}>--</Text>
                 </View>
 
                 {/* Status Badge */}
@@ -223,7 +392,7 @@ export default function Index() {
                 >
                   <Text style={{ fontSize: 14, color: "#333" }}>⏱</Text>
                   <Text style={{ fontSize: 13, fontWeight: "bold", color: "#333" }}>
-                    {currentTicket?.status?.toUpperCase() || ""}
+                    {currentTicket ? "OPEN" : ""}
                   </Text>
                 </View>
               </View>
@@ -250,21 +419,18 @@ export default function Index() {
                     paddingHorizontal: 12,
                     paddingVertical: 8,
                     borderRadius: 20,
-                    backgroundColor: showRightBadges
-                      ? currentTicket?.priority === "Critical"
-                        ? "#C21B1B"
-                        : currentTicket?.priority === "High"
-                        ? "#E0890E"
-                        : currentTicket?.priority === "Low"
-                        ? "#53A668"
-                        : "#757575"
-                      : "#E5E7EB",
+                    backgroundColor: showRightBadges ? priorityBadgeColor : "#E5E7EB",
                   }}
                 >
-                  <Text style={{ fontSize: 12, fontWeight: "bold", color: showRightBadges ? "white" : "#666" }}>Prio</Text>
-                  <Text style={{ fontSize: 12, fontWeight: "bold", color: showRightBadges ? "white" : "#666" }}>
-                    {showRightBadges ? currentTicket?.priority?.toUpperCase() : "--"}
+                    <Text style={{ fontSize: 12, fontWeight: "bold", color: priorityFromEndpoint ? "white" : "#666" }}>Prio</Text>
+                    <Text style={{ fontSize: 12, fontWeight: "bold", color: priorityFromEndpoint ? "white" : "#666" }}>
+                    {showRightBadges ? priorityTextUpper || "--" : "--"}
                   </Text>
+                    {showRightBadges && showPriorityConfidence ? (
+                      <Text style={{ fontSize: 10, color: "white" }}>
+                      ({Math.round((priorityConfidence ?? 0) * 100)}%)
+                    </Text>
+                  ) : null}
                 </View>
 
               <View
@@ -284,6 +450,11 @@ export default function Index() {
                   </Text>
                 </View>
             </View>
+            {priorityError && showPriority ? (
+              <Text style={{ fontSize: 11, color: "#B91C1C", marginLeft: 100, marginBottom: 12 }}>
+                Priorität konnte nicht berechnet werden.
+              </Text>
+            ) : null}
             <TextInput
                 style={{
                   borderWidth: 1,
@@ -307,6 +478,63 @@ export default function Index() {
               editable={false}
               multiline
             />
+            <Text style={{ fontSize: 12, color: "#555", marginTop: 16, marginBottom: 8, marginLeft: 100 }}>
+              Eigene Antwort an den Kunden
+            </Text>
+            <TextInput
+              style={{
+                borderWidth: 1,
+                borderColor: "#D1D5DB",
+                padding: 10,
+                borderRadius: 5,
+                height: 160,
+                width: 750,
+                textAlignVertical: "top",
+                backgroundColor: "white",
+                fontSize: 12,
+                marginLeft: 100,
+                marginBottom: 12,
+                shadowColor: "#000",
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.05,
+                shadowRadius: 4,
+                elevation: 2,
+              }}
+              placeholder="Formuliere hier deine Rückmeldung..."
+              value={userResponse}
+              onChangeText={setUserResponse}
+              multiline
+            />
+            <TouchableOpacity
+              onPress={handleSendUserResponse}
+              disabled={sendingUserResponse}
+              style={{
+                borderRadius: 5,
+                overflow: "hidden",
+                alignSelf: "flex-end",
+                marginRight: 100,
+                width: 180,
+                height: 44,
+              }}
+            >
+              <LinearGradient
+                colors={["#451268", "#B93F4B"]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={{
+                  flex: 1,
+                  justifyContent: "center",
+                  alignItems: "center",
+                  opacity: sendingUserResponse ? 0.6 : 1,
+                }}
+              >
+                {sendingUserResponse ? (
+                  <ActivityIndicator color="white" />
+                ) : (
+                  <Text style={{ color: "white", fontWeight: "bold", fontSize: 12 }}>Antwort senden</Text>
+                )}
+              </LinearGradient>
+            </TouchableOpacity>
           </View>
         </View>
       )}

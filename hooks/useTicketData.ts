@@ -34,7 +34,13 @@ export const useTicketData = () => {
         const resolution = String(row["Case Resolution Description"] ?? row.resolution ?? "").trim();
         const product = String(row.Product ?? row.department ?? "").trim();
 
-        const status = String(row.status ?? (resolution ? "Closed" : "Open")).trim();
+        const status = String(
+          row.status ??
+            row.Status ??
+            row["Case Status"] ??
+            row["CaseStatus"] ??
+            (resolution ? "Closed" : "Open")
+        ).trim();
         const normalizedStatus = status
           ? status.length === 1
             ? status.toUpperCase()
