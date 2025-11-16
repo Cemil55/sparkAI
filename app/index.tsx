@@ -1,15 +1,12 @@
 import { LinearGradient } from "expo-linear-gradient";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Image, ScrollView, Text, TextInput, TouchableOpacity, View, type StyleProp, type ViewStyle } from "react-native";
 import { useTicketData } from "../hooks/useTicketData";
-import { callSparkAI } from "../services/geminiService";
+import { callSparkAI, type FlowiseHistoryMessage } from "../services/geminiService";
 import { predictPriority } from "../services/priorityService";
+import { getSessionId } from "../utils/session";
 
 export default function Index() {
-  type ChatMessage = {
-    sender: "user" | "ai";
-    message: string;
-  };
 
   const normalizePriorityLabel = (value: string) => {
     const trimmed = value?.trim().toLowerCase();
@@ -47,7 +44,6 @@ export default function Index() {
   const [llmResponse, setLlmResponse] = useState("");
   const [userResponse, setUserResponse] = useState("");
   const [sendingUserResponse, setSendingUserResponse] = useState(false);
-  const [conversation, setConversation] = useState<ChatMessage[]>([]);
   const [predictedPriority, setPredictedPriority] = useState<string>("");
   const [priorityConfidence, setPriorityConfidence] = useState<number | null>(null);
   const [priorityLoading, setPriorityLoading] = useState(false);
@@ -55,6 +51,8 @@ export default function Index() {
   const [showPriority, setShowPriority] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingDots, setLoadingDots] = useState("...");
+  const [hasSentInitialPrompt, setHasSentInitialPrompt] = useState(false);
+  const conversationHistoryRef = useRef<FlowiseHistoryMessage[]>([]);
   const { tickets, loading: ticketsLoading, getTicketById, error } = useTicketData();
 
   useEffect(() => {
@@ -69,41 +67,71 @@ export default function Index() {
   }, [searchTicketId, tickets]);
 
   const handleSearchTicket = () => {
-    if (ticketId.trim()) {
+    const trimmedId = ticketId.trim();
+
+    if (trimmedId) {
       setLlmResponse("");
       setUserResponse("");
       setLoadingDots("...");
-      setConversation([]);
       setShowPriority(false);
       setPredictedPriority("");
       setPriorityConfidence(null);
       setPriorityError("");
       setPriorityLoading(false);
-      setSearchTicketId(ticketId);
+      setSearchTicketId(trimmedId);
+      setHasSentInitialPrompt(false);
+      conversationHistoryRef.current = [];
     } else {
       setSearchTicketId("");
       setDescription("");
       setLlmResponse("");
       setUserResponse("");
-      setConversation([]);
       setShowPriority(false);
       setPredictedPriority("");
       setPriorityConfidence(null);
       setPriorityError("");
       setPriorityLoading(false);
+      setHasSentInitialPrompt(false);
+      conversationHistoryRef.current = [];
     }
   };
 
-  const buildConversationPrompt = (messages: ChatMessage[]) =>
-    messages
-      .map((entry) =>
-        entry.sender === "user"
-          ? `Nutzer: ${entry.message}`
-          : `SparkAI: ${entry.message}`
-      )
-      .join("\n\n");
 
   const currentTicket = searchTicketId ? getTicketById(searchTicketId) : undefined;
+
+  const buildTicketContext = () => {
+    if (currentTicket) {
+      const supportTypeRaw = currentTicket.raw?.["Support Type"];
+      const supportType =
+        typeof supportTypeRaw === "string" && supportTypeRaw.trim().length > 0
+          ? supportTypeRaw.trim()
+          : "Unbekannt";
+
+      return [
+        `Ticket-ID: ${currentTicket.id}`,
+        `Betreff: ${currentTicket.subject || "Unbekannt"}`,
+        `Produkt: ${currentTicket.product || "Unbekannt"}`,
+        `Abteilung: ${currentTicket.department || "Unbekannt"}`,
+        `Status: ${currentTicket.status || "Unbekannt"}`,
+        `Support-Typ: ${supportType}`,
+        `Beschreibung: ${description}`,
+      ]
+        .map((line) => line.trim())
+        .join("\n");
+    }
+
+    return description;
+  };
+
+  const buildInitialPrompt = (ticketContext: string) =>
+    [
+      "Du bist SparkAI, ein deutschsprachiger Support-Assistent. Analysiere das folgende Ticket und formuliere eine strukturierte, pragmatische Lösung mit konkreten nächsten Schritten.",
+      "Deine Antwort muss mindestens eine fundierte Handlungsempfehlung enthalten. Wenn Informationen fehlen, stelle gezielte Rückfragen und schlage diagnostische Schritte vor.",
+      "Du darfst den Fall nur eskalieren, wenn eine unmittelbare Sicherheits-, Datenschutz- oder Eskalationsrichtlinie verletzt würde. Formulierungen wie 'Ich habe keine Lösung' sind zu vermeiden.",
+      "Ticketinformationen:",
+      ticketContext.trim(),
+      "Antworte bitte auf Deutsch und konzentriere dich ausschließlich auf die Ticketdaten.",
+    ].join("\n\n");
 
   const handleSendToLLM = async () => {
     if (!description || description === "Ticket nicht gefunden") {
@@ -121,15 +149,7 @@ export default function Index() {
       setPredictedPriority("");
       setPriorityConfidence(null);
 
-      const ticketContext = currentTicket
-        ? `Ticket-ID: ${currentTicket.id}\nBetreff: ${currentTicket.subject || "Unbekannt"}\nProdukt: ${currentTicket.product || "Unbekannt"}\nBeschreibung: ${description}`
-        : description;
-
-      const initialConversation: ChatMessage[] = [
-        ...conversation,
-        { sender: "user" as const, message: ticketContext },
-      ];
-      setConversation(initialConversation);
+      const ticketContext = buildTicketContext();
 
       let priorityPromise: Promise<void> | undefined;
       if (currentTicket) {
@@ -164,14 +184,24 @@ export default function Index() {
         setPriorityLoading(false);
       }
 
-      const response = await callSparkAI(buildConversationPrompt(initialConversation));
-      const updatedConversation: ChatMessage[] = [
-        ...initialConversation,
-        { sender: "ai" as const, message: response },
-      ];
-      setConversation(updatedConversation);
+      const sessionForCall = await getSessionId();
+      const messageForSpark = hasSentInitialPrompt
+        ? description.trim()
+        : buildInitialPrompt(ticketContext);
+      const response = await callSparkAI(
+        messageForSpark,
+        sessionForCall,
+        [...conversationHistoryRef.current]
+      );
       setLlmResponse(response);
       setUserResponse("");
+      setHasSentInitialPrompt(true);
+
+      conversationHistoryRef.current = [
+        ...conversationHistoryRef.current,
+        { role: "userMessage", content: messageForSpark },
+        { role: "apiMessage", content: response },
+      ];
 
       if (priorityPromise) {
         await priorityPromise;
@@ -194,29 +224,27 @@ export default function Index() {
 
     try {
       setSendingUserResponse(true);
-      setLoading(true);
       setLlmResponse("Spark AI verarbeitet deine Antwort");
       setLoadingDots("...");
 
-      const nextConversation: ChatMessage[] = [
-        ...conversation,
-        { sender: "user" as const, message: trimmedResponse },
-      ];
-      setConversation(nextConversation);
-
-      const response = await callSparkAI(buildConversationPrompt(nextConversation));
-      const updatedConversation: ChatMessage[] = [
-        ...nextConversation,
-        { sender: "ai" as const, message: response },
-      ];
-      setConversation(updatedConversation);
+      const sessionForCall = await getSessionId();
+      const response = await callSparkAI(
+        trimmedResponse,
+        sessionForCall,
+        [...conversationHistoryRef.current]
+      );
       setLlmResponse(response);
       setUserResponse("");
+
+      conversationHistoryRef.current = [
+        ...conversationHistoryRef.current,
+        { role: "userMessage", content: trimmedResponse },
+        { role: "apiMessage", content: response },
+      ];
     } catch (error) {
       setLlmResponse(`Fehler: ${error}`);
     } finally {
       setSendingUserResponse(false);
-      setLoading(false);
     }
   };
 
@@ -226,7 +254,7 @@ export default function Index() {
   const showRightBadges = Boolean(showPriority && description && llmResponse && !loading);
 
   useEffect(() => {
-    if (!loading) {
+    if (!loading && !sendingUserResponse) {
       return;
     }
 
@@ -243,7 +271,7 @@ export default function Index() {
     }, 400);
 
     return () => clearInterval(interval);
-  }, [loading]);
+  }, [loading, sendingUserResponse]);
 
   const priorityFromEndpoint = Boolean(predictedPriority);
   const endpointColor = "#7C3AED";
@@ -461,7 +489,7 @@ export default function Index() {
                   borderColor: "#B93F4B",
                   padding: 10,
                   borderRadius: 5,
-                  height: 600,
+                  height: 360,
                   width: 750,
                   textAlignVertical: "top",
                   backgroundColor: "white",
@@ -474,12 +502,21 @@ export default function Index() {
                   elevation: 5,
                 }}
               placeholder="Frag einfach SparkAI..."
-              value={loading ? `${llmResponse}${loadingDots}` : llmResponse}
+              value={loading || sendingUserResponse ? `${llmResponse}${loadingDots}` : llmResponse}
               editable={false}
               multiline
             />
-            <Text style={{ fontSize: 12, color: "#555", marginTop: 16, marginBottom: 8, marginLeft: 100 }}>
-              Eigene Antwort an den Kunden
+            <Text
+              style={{
+                fontSize: 12,
+                color: "#555",
+                marginTop: 16,
+                marginBottom: 8,
+                marginLeft: 100,
+                width: 750,
+              }}
+            >
+              Hast du noch Anmerkungen oder Rückfragen zur Antwort von Spark?
             </Text>
             <TextInput
               style={{
@@ -511,8 +548,8 @@ export default function Index() {
               style={{
                 borderRadius: 5,
                 overflow: "hidden",
-                alignSelf: "flex-end",
-                marginRight: 100,
+                alignSelf: "flex-start",
+                marginLeft: 100,
                 width: 180,
                 height: 44,
               }}
@@ -531,7 +568,7 @@ export default function Index() {
                 {sendingUserResponse ? (
                   <ActivityIndicator color="white" />
                 ) : (
-                  <Text style={{ color: "white", fontWeight: "bold", fontSize: 12 }}>Antwort senden</Text>
+                  <Text style={{ color: "white", fontWeight: "bold", fontSize: 12}}>Antwort senden</Text>
                 )}
               </LinearGradient>
             </TouchableOpacity>
@@ -546,7 +583,7 @@ export default function Index() {
           disabled={loading}
           style={{
             borderRadius: 5,
-            marginTop: 15,
+            marginTop: -40,
             overflow: "hidden",
             maxWidth: 750,
           }}
