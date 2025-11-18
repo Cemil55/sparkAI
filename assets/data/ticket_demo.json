@@ -1,0 +1,9 @@
+{
+    "Case Number": "Ticket#20200521-5022024",
+    "Subject": "FFOX515 Sync information cannot be retrieved from node via NMS Sync-Map",
+    "Case Description": "In the Bahrain NMS the upload of the SDH Synchronization information from the Sync map fails for 3 nodes. For all other nodes it is working as expected. As a result the Sync map is not properly shown because the links are missing due to these 3 stations and it is displayed as multiple islands. However one can see that the origin of some islands are deriving their clocking signal from these nodes. If connected to the node with UCST the sync information can be uploaded as expected and is also selected as expected (no loop). During some reconfigurations recentyl done on IP and OSPF areas of these nodes the COBUX have been restarted but the problem is still existing in these nodes. Also they have been removed from the NMS and added to a new Elementr Agent but without success.",
+    "created": "10:15:30 | 21.07.2025",
+    "assigned_to": "Sam Singh",
+    "Status": "Open",
+    "Priority": "High Priority"
+  }

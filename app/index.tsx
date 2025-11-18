@@ -1,12 +1,37 @@
 import { LinearGradient } from "expo-linear-gradient";
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Image, ScrollView, Text, TextInput, TouchableOpacity, View, type StyleProp, type ViewStyle } from "react-native";
+import {
+  ActivityIndicator,
+  Image,
+  ScrollView,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+  type StyleProp,
+  type ViewStyle,
+} from "react-native";
+import Sidebar from "../components/Sidebar";
+import Topbar from "../components/Topbar";
 import { useTicketData } from "../hooks/useTicketData";
 import { callSparkAI, type FlowiseHistoryMessage } from "../services/geminiService";
 import { predictPriority } from "../services/priorityService";
 import { getSessionId } from "../utils/session";
 
+type DemoTicket = {
+  "Case Number": string;
+  Subject: string;
+  "Case Description": string;
+  created: string;
+  assigned_to: string;
+  Status: string;
+  Priority: string;
+};
+
+const demoTicketData = require("../assets/data/ticket_demo.json") as DemoTicket;
+
 export default function Index() {
+  const demoTicket: DemoTicket = demoTicketData;
 
   const normalizePriorityLabel = (value: string) => {
     const trimmed = value?.trim().toLowerCase();
@@ -44,6 +69,7 @@ export default function Index() {
   const [llmResponse, setLlmResponse] = useState("");
   const [userResponse, setUserResponse] = useState("");
   const [sendingUserResponse, setSendingUserResponse] = useState(false);
+  const [demoNotes, setDemoNotes] = useState("");
   const [predictedPriority, setPredictedPriority] = useState<string>("");
   const [priorityConfidence, setPriorityConfidence] = useState<number | null>(null);
   const [priorityLoading, setPriorityLoading] = useState(false);
@@ -65,37 +91,6 @@ export default function Index() {
       }
     }
   }, [searchTicketId, tickets]);
-
-  const handleSearchTicket = () => {
-    const trimmedId = ticketId.trim();
-
-    if (trimmedId) {
-      setLlmResponse("");
-      setUserResponse("");
-      setLoadingDots("...");
-      setShowPriority(false);
-      setPredictedPriority("");
-      setPriorityConfidence(null);
-      setPriorityError("");
-      setPriorityLoading(false);
-      setSearchTicketId(trimmedId);
-      setHasSentInitialPrompt(false);
-      conversationHistoryRef.current = [];
-    } else {
-      setSearchTicketId("");
-      setDescription("");
-      setLlmResponse("");
-      setUserResponse("");
-      setShowPriority(false);
-      setPredictedPriority("");
-      setPriorityConfidence(null);
-      setPriorityError("");
-      setPriorityLoading(false);
-      setHasSentInitialPrompt(false);
-      conversationHistoryRef.current = [];
-    }
-  };
-
 
   const currentTicket = searchTicketId ? getTicketById(searchTicketId) : undefined;
 
@@ -132,6 +127,36 @@ export default function Index() {
       ticketContext.trim(),
       "Antworte bitte auf Deutsch und konzentriere dich ausschließlich auf die Ticketdaten.",
     ].join("\n\n");
+
+  const handleSearchTicket = () => {
+    const trimmedId = ticketId.trim();
+
+    if (trimmedId) {
+      setLlmResponse("");
+      setUserResponse("");
+      setLoadingDots("...");
+      setShowPriority(false);
+      setPredictedPriority("");
+      setPriorityConfidence(null);
+      setPriorityError("");
+      setPriorityLoading(false);
+      setSearchTicketId(trimmedId);
+      setHasSentInitialPrompt(false);
+      conversationHistoryRef.current = [];
+    } else {
+      setSearchTicketId("");
+      setDescription("");
+      setLlmResponse("");
+      setUserResponse("");
+      setShowPriority(false);
+      setPredictedPriority("");
+      setPriorityConfidence(null);
+      setPriorityError("");
+      setPriorityLoading(false);
+      setHasSentInitialPrompt(false);
+      conversationHistoryRef.current = [];
+    }
+  };
 
   const handleSendToLLM = async () => {
     if (!description || description === "Ticket nicht gefunden") {
@@ -249,7 +274,7 @@ export default function Index() {
   };
 
   const inputWrapperStyle: StyleProp<ViewStyle> = description
-    ? { marginTop: 20, marginBottom: 20, alignItems: "center" }
+    ? { marginTop: 20, marginBottom: 20, alignItems: "flex-start" }
     : { flex: 1, justifyContent: "center", alignItems: "center", marginBottom: 20 };
   const showRightBadges = Boolean(showPriority && description && llmResponse && !loading);
 
@@ -294,9 +319,207 @@ export default function Index() {
     !Number.isNaN(priorityConfidence);
 
   return (
-    <ScrollView style={{ flex: 1, padding: 20, backgroundColor: "#f5f5f5" }}>
-      {/* Ticket ID Input */}
-      <View style={inputWrapperStyle}>
+    <View style={{ flex: 1, flexDirection: "row", backgroundColor: "#f5f5f5" }}>
+      <Sidebar activeKey="tickets" />
+      <ScrollView
+        style={{ flex: 1, padding: 20, backgroundColor: "#f5f5f5" }}
+        contentContainerStyle={{ paddingBottom: 40 }}
+      >
+        <Topbar userName="Sam Singh" />
+        {/* Demo Ticket Card */}
+        <View
+          style={{
+            backgroundColor: "white",
+            borderRadius: 24,
+            padding: 24,
+            marginTop: 24,
+            marginBottom: 24,
+            shadowColor: "#000",
+            shadowOffset: { width: 0, height: 10 },
+            shadowOpacity: 0.08,
+            shadowRadius: 20,
+            elevation: 6,
+            gap: 18,
+          }}
+        >
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            <Text
+              style={{ fontSize: 16, fontWeight: "700", color: "#27253D" }}
+              numberOfLines={1}
+            >
+              {demoTicket["Case Number"]}
+            </Text>
+            <View
+              style={{
+                paddingHorizontal: 18,
+                paddingVertical: 8,
+                borderRadius: 20,
+                backgroundColor: "#5B60FF",
+              }}
+            >
+              <Text style={{ color: "white", fontWeight: "600", fontSize: 12 }}>
+                {demoTicket.Status}
+              </Text>
+            </View>
+
+            <View
+              style={{
+                paddingHorizontal: 18,
+                paddingVertical: 8,
+                borderRadius: 20,
+                backgroundColor: "#FF6C6C",
+              }}
+            >
+              <Text style={{ color: "white", fontWeight: "600", fontSize: 12 }}>
+                {demoTicket.Priority}
+              </Text>
+            </View>
+
+            <Text style={{ fontSize: 12, color: "#7D7A92", marginLeft: "auto" }}>
+              {demoTicket.created ? `Created at ${demoTicket.created}` : ""}
+            </Text>
+          </View>
+
+          <Text style={{ fontSize: 20, fontWeight: "400", color: "#2E2C34" }}>
+            {demoTicket.Subject}
+          </Text>
+
+          <Text style={{ fontSize: 13, lineHeight: 20, color: "#5E5B73" }}>
+            {demoTicket["Case Description"]}
+          </Text>
+
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+              <View
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 22,
+                  backgroundColor: "#E52C3B",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  overflow: "hidden",
+                }}
+              >
+                <Image
+                  source={require("../assets/images/SBB.png")}
+                  style={{ width: 28, height: 28, resizeMode: "contain" }}
+                />
+              </View>
+              <View>
+                <Text style={{ fontSize: 14, fontWeight: "600", color: "#727272" }}>
+                  SBB CFF FFS
+                </Text>
+              </View>
+            </View>
+            <View style={{ alignItems: "flex-end" }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                <Text style={{ fontSize: 12, color: "#7D7A92" }}>Assigned to</Text>
+                <Text style={{ fontSize: 14, fontWeight: "600", color: "#2E2C34" }}>
+                  {demoTicket.assigned_to}
+                </Text>
+              </View>
+            </View>
+          </View>
+        </View>
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "stretch",
+            gap: 12,
+            marginBottom: 24,
+            width: "100%",
+          }}
+        >
+          <View
+            style={{
+              flex: 1,
+              backgroundColor: "white",
+              borderRadius: 16,
+              padding: 20,
+              shadowColor: "#000",
+              shadowOffset: { width: 0, height: 6 },
+              shadowOpacity: 0.06,
+              shadowRadius: 12,
+              elevation: 4,
+            }}
+          >
+            <TextInput
+              value={demoNotes}
+              onChangeText={setDemoNotes}
+              placeholder="Type your response here..."
+              placeholderTextColor="#9CA3AF"
+              multiline
+              style={{
+                width: "100%",
+                minHeight: 40,
+                borderWidth: 1,
+                borderColor: "#E5E7EB",
+                borderRadius: 12,
+                paddingHorizontal: 16,
+                paddingVertical: 10,
+                fontSize: 13,
+                color: "#333",
+                backgroundColor: "#F9FAFB",
+              }}
+            />
+          </View>
+          <TouchableOpacity
+            activeOpacity={0.8}
+            style={{
+              width: 150,
+              minHeight: 80,
+              borderRadius: 12,
+              shadowColor: "#000",
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.08,
+              shadowRadius: 4,
+              elevation: 3,
+            }}
+          >
+            <LinearGradient
+              colors={["#B93F4B", "#451268"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={{
+                flex: 1,
+                borderRadius: 12,
+                padding: 2,
+                overflow: "hidden",
+              }}
+            >
+              <View
+                style={{
+                  flex: 1,
+                  borderRadius: 10,
+                  backgroundColor: "white",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  paddingVertical: 8,
+                }}
+              >
+                <Image
+                  source={require("../assets/images/spark-logo.png")}
+                  style={{ width: 64, height: 32, resizeMode: "contain" }}
+                />
+              </View>
+            </LinearGradient>
+          </TouchableOpacity>
+        </View>
+        {/* Ticket ID Input */}
+        <View style={inputWrapperStyle}>
         <View
           style={{
             flexDirection: "row",
@@ -606,6 +829,7 @@ export default function Index() {
           </LinearGradient>
         </TouchableOpacity>
       )}
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
