@@ -25,16 +25,14 @@ export type SidebarProps = {
 
 export const Sidebar: React.FC<SidebarProps> = ({ activeKey = "tickets", onSelect }) => {
   return (
-    <LinearGradient
-      colors={["#FFFFFF", "#F5ECFF"]}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 0, y: 1 }}
+    <View
       style={{
         width: SIDEBAR_WIDTH,
-        paddingTop: 48,
+        paddingTop: 32,
         paddingBottom: 32,
         borderRightWidth: 1,
-        borderRightColor: "#ECE5F5",
+        borderRightColor: "#F3F4F6",
+        backgroundColor: "white",
       }}
     >
       <View style={{ paddingHorizontal: 28 }}>
@@ -70,15 +68,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeKey = "tickets", onSelec
                       alignItems: "center",
                     }}
                   >
-                    <View
-                      style={{
-                        width: 4,
-                        height: 32,
-                        borderRadius: 4,
-                        backgroundColor: "#451268",
-                        marginRight: 14,
-                      }}
-                    />
                     <MaterialCommunityIcons
                       name={item.icon}
                       size={20}
@@ -137,7 +126,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeKey = "tickets", onSelec
           );
         })}
       </View>
-    </LinearGradient>
+    </View>
   );
 };
 
