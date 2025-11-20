@@ -90,6 +90,7 @@ export default function Index() {
   const [hasSentInitialPrompt, setHasSentInitialPrompt] = useState(false);
   const [showFullscreenResponse, setShowFullscreenResponse] = useState(false);
   const [messages, setMessages] = useState<FlowiseHistoryMessage[]>([]);
+  const [hasStartedSpark, setHasStartedSpark] = useState(false);
   const conversationHistoryRef = useRef<FlowiseHistoryMessage[]>([]);
   const scrollViewRef = useRef<ScrollView>(null);
   const { tickets, loading: ticketsLoading, getTicketById, error } = useTicketData();
@@ -299,8 +300,8 @@ export default function Index() {
 
     try {
       setSendingUserResponse(true);
-      setLlmResponse("");
-      setLoadingDots("...");
+      // setLlmResponse(""); // Removed to keep priority states
+      // setLoadingDots("..."); // Removed to keep priority states
 
       // Ladeanimation als Platzhalter im Chat
       const loadingMsg: FlowiseHistoryMessage = { role: "apiMessage", content: "__LOADING__" };
@@ -308,6 +309,7 @@ export default function Index() {
       setMessages([...conversationHistoryRef.current]);
 
       const sessionForCall = await getSessionId();
+      // Sende nur die User-Nachricht und die History an SparkAI, kein Priority-Endpoint!
       const response = await callSparkAI(
         trimmedResponse,
         sessionForCall,
@@ -555,6 +557,7 @@ export default function Index() {
             onPress={() => {
               handleSendToLLM("Ticket#20200521-5022024");
               setShowFullscreenResponse(true);
+              setHasStartedSpark(true);
             }}
             disabled={loading}
             style={{
@@ -597,7 +600,7 @@ export default function Index() {
             </LinearGradient>
           </TouchableOpacity>
         </View>
-        <View style={{ flexDirection: "row", gap: 8, marginBottom: 12, marginTop: 24 }}>
+        {hasStartedSpark && <View style={{ flexDirection: "row", gap: 8, marginBottom: 12, marginTop: 24 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 25 }}>
               <View style={{ width: 40, height: 15 }}>
                 <Svg width="100%" height="100%">
@@ -676,9 +679,9 @@ export default function Index() {
                 </Text>
               </View>
             </View>
-          </View>
+          </View>}
         
-        <View
+        {hasStartedSpark && <View
           style={{
             flexDirection: "row",
             alignItems: "stretch",
@@ -741,103 +744,113 @@ export default function Index() {
               />
             </View>
           </LinearGradient>
-        </View>
-        <View
+        </View>}
+        {hasStartedSpark && <View
           style={{
-            backgroundColor: "white",
-            borderRadius: 16,
-            padding: 20,
-            shadowColor: "#000",
-            shadowOffset: { width: 0, height: 6 },
-            shadowOpacity: 0.06,
-            shadowRadius: 12,
-            elevation: 4,
+            flexDirection: "row",
+            alignItems: "stretch",
+            gap: 12,
             marginBottom: 24,
+            width: "100%",
           }}
         >
-          <View style={{ position: "relative" }}>
-            {emptyTicketNotes.trim().length === 0 ? (
-              <View
-                pointerEvents="none"
-                style={{ position: "absolute", left: 16, right: 16, top: 10, height: 20 }}
-              >
-                <Svg width="100%" height="20">
-                  <Defs>
-                    <SvgLinearGradient
-                      id="empty-ticket-gradient"
-                      x1="0%"
-                      y1="0%"
-                      x2="100%"
-                      y2="0%"
-                    >
-                      <Stop offset="0%" stopColor="#B93F4B" />
-                      <Stop offset="100%" stopColor="#451268" />
-                    </SvgLinearGradient>
-                  </Defs>
-                  <SvgText
-                    fill="url(#empty-ticket-gradient)"
-                    fontSize={13}
-                    fontWeight="400"
-                    x="0"
-                    y={14}
-                  >
-                    Do you have any questions about Spark's answer?
-                  </SvgText>
-                </Svg>
-              </View>
-            ) : null}
-            <TextInput
-              value={emptyTicketNotes}
-              onChangeText={setEmptyTicketNotes}
-              placeholder=""
-              multiline
-              style={{
-                width: "100%",
-                minHeight: 40,
-                borderWidth: 1,
-                borderColor: "#E5E7EB",
-                borderRadius: 12,
-                paddingHorizontal: 16,
-                paddingVertical: 10,
-                fontSize: 13,
-                color: "#333",
-                backgroundColor: "#F9FAFB",
-              }}
-            />
-          </View>
-        </View>
-        <TouchableOpacity
-          onPress={() => handleSendUserResponse(emptyTicketNotes)}
-          disabled={sendingUserResponse}
-          style={{
-            borderRadius: 5,
-            overflow: "hidden",
-            alignSelf: "flex-start",
-            width: 180,
-            height: 44,
-            marginBottom: 24,
-          }}
-        >
-          <LinearGradient
-            colors={["#451268", "#B93F4B"]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
+          <View
             style={{
               flex: 1,
-              justifyContent: "center",
-              alignItems: "center",
-              opacity: sendingUserResponse ? 0.6 : 1,
+              backgroundColor: "white",
+              borderRadius: 16,
+              padding: 20,
+              shadowColor: "#000",
+              shadowOffset: { width: 0, height: 6 },
+              shadowOpacity: 0.06,
+              shadowRadius: 12,
+              elevation: 4,
             }}
           >
-            {sendingUserResponse ? (
-              <ActivityIndicator color="white" />
-            ) : (
-              <Text style={{ color: "white", fontWeight: "bold", fontSize: 12 }}>
-                Antwort senden
-              </Text>
-            )}
-          </LinearGradient>
-        </TouchableOpacity>
+            <View style={{ position: "relative" }}>
+              {emptyTicketNotes.trim().length === 0 ? (
+                <View
+                  pointerEvents="none"
+                  style={{ position: "absolute", left: 16, right: 16, top: 10, height: 20 }}
+                >
+                  <Svg width="100%" height="20">
+                    <Defs>
+                      <SvgLinearGradient
+                        id="empty-ticket-gradient"
+                        x1="0%"
+                        y1="0%"
+                        x2="100%"
+                        y2="0%"
+                      >
+                        <Stop offset="0%" stopColor="#B93F4B" />
+                        <Stop offset="100%" stopColor="#451268" />
+                      </SvgLinearGradient>
+                    </Defs>
+                    <SvgText
+                      fill="url(#empty-ticket-gradient)"
+                      fontSize={13}
+                      fontWeight="400"
+                      x="0"
+                      y={14}
+                    >
+                      Do you have any questions about Spark's answer?
+                    </SvgText>
+                  </Svg>
+                </View>
+              ) : null}
+              <TextInput
+                value={emptyTicketNotes}
+                onChangeText={setEmptyTicketNotes}
+                placeholder=""
+                multiline
+                style={{
+                  width: "100%",
+                  minHeight: 40,
+                  borderWidth: 1,
+                  borderColor: "#E5E7EB",
+                  borderRadius: 12,
+                  paddingHorizontal: 16,
+                  paddingVertical: 2,
+                  fontSize: 13,
+                  color: "#333",
+                  backgroundColor: "#F9FAFB",
+                }}
+              />
+            </View>
+          </View>
+
+          <TouchableOpacity
+            onPress={() => handleSendUserResponse(emptyTicketNotes)}
+            disabled={sendingUserResponse}
+            style={{
+              width: 180,
+              height: 50,
+              borderRadius: 5,
+              overflow: "hidden",
+              marginTop: 18,
+            }}
+          >
+            <LinearGradient
+              colors={["#451268", "#B93F4B"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={{
+                flex: 1,
+                justifyContent: "center",
+                alignItems: "center",
+                opacity: sendingUserResponse ? 0.6 : 1,
+              }}
+            >
+              {sendingUserResponse ? (
+                <ActivityIndicator color="white" />
+              ) : (
+                <Text style={{ color: "white", fontWeight: "bold", fontSize: 12 }}>
+                  Antwort senden
+                </Text>
+              )}
+            </LinearGradient>
+          </TouchableOpacity>
+        </View>}
         
           </ScrollView>
         </View>
@@ -1095,27 +1108,111 @@ export default function Index() {
             </View>
             
             <View style={{ gap: 12, borderTopWidth: 1, borderTopColor: "#F3F4F6", paddingTop: 16 }}>
-              <TextInput
-                value={emptyTicketNotes}
-                onChangeText={setEmptyTicketNotes}
-                placeholder="Type your response here..."
-                placeholderTextColor="#9CA3AF"
-                returnKeyType="send"
-                onSubmitEditing={() => handleSendUserResponse(emptyTicketNotes)}
+              <View
                 style={{
+                  flexDirection: "row",
+                  alignItems: "stretch",
+                  gap: 12,
                   width: "100%",
-                  minHeight: 40,
-                  maxHeight: 100,
-                  borderWidth: 1,
-                  borderColor: "#E5E7EB",
-                  borderRadius: 12,
-                  paddingHorizontal: 16,
-                  paddingVertical: 10,
-                  fontSize: 13,
-                  color: "#333",
-                  backgroundColor: "#F9FAFB",
                 }}
-              />
+              >
+                <View
+                  style={{
+                    flex: 1,
+                    backgroundColor: "white",
+                    borderRadius: 16,
+                    padding: 20,
+                    shadowColor: "#000",
+                    shadowOffset: { width: 0, height: 6 },
+                    shadowOpacity: 0.06,
+                    shadowRadius: 12,
+                    elevation: 4,
+                  }}
+                >
+                  <View style={{ position: "relative" }}>
+                    {emptyTicketNotes.trim().length === 0 ? (
+                      <View
+                        pointerEvents="none"
+                        style={{ position: "absolute", left: 16, right: 16, top: 10, height: 20 }}
+                      >
+                        <Svg width="100%" height="20">
+                          <Defs>
+                            <SvgLinearGradient
+                              id="empty-ticket-modal-gradient"
+                              x1="0%"
+                              y1="0%"
+                              x2="100%"
+                              y2="0%"
+                            >
+                              <Stop offset="0%" stopColor="#B93F4B" />
+                              <Stop offset="100%" stopColor="#451268" />
+                            </SvgLinearGradient>
+                          </Defs>
+                          <SvgText
+                            fill="url(#empty-ticket-modal-gradient)"
+                            fontSize={13}
+                            fontWeight="400"
+                            x="0"
+                            y={14}
+                          >
+                            Do you have any questions about Spark's answer?
+                          </SvgText>
+                        </Svg>
+                      </View>
+                    ) : null}
+                    <TextInput
+                      value={emptyTicketNotes}
+                      onChangeText={setEmptyTicketNotes}
+                      placeholder=""
+                      multiline
+                      style={{
+                        width: "100%",
+                        minHeight: 40,
+                        borderWidth: 1,
+                        borderColor: "#E5E7EB",
+                        borderRadius: 12,
+                        paddingHorizontal: 16,
+                        paddingVertical: 2,
+                        fontSize: 13,
+                        color: "#333",
+                        backgroundColor: "#F9FAFB",
+                      }}
+                    />
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  onPress={() => handleSendUserResponse(emptyTicketNotes)}
+                  disabled={sendingUserResponse}
+                  style={{
+                    width: 180,
+                    height: 44,
+                    borderRadius: 5,
+                    overflow: "hidden",
+                    marginTop: 20,
+                  }}
+                >
+                  <LinearGradient
+                    colors={["#451268", "#B93F4B"]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={{
+                      flex: 1,
+                      justifyContent: "center",
+                      alignItems: "center",
+                      opacity: sendingUserResponse ? 0.6 : 1,
+                    }}
+                  >
+                    {sendingUserResponse ? (
+                      <ActivityIndicator color="white" />
+                    ) : (
+                      <Text style={{ color: "white", fontWeight: "bold", fontSize: 12 }}>
+                        Antwort senden
+                      </Text>
+                    )}
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
         </View>
