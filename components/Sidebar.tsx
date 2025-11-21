@@ -46,7 +46,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeKey = "tickets", onSelec
         {items.map((item) => {
           const isActive = item.key === activeKey;
           const baseTextColor = "#2E2C34";
-          const iconColor = isActive ? "#451268" : "#7A7A8D";
+          const iconColor = isActive ? "#B93F4B" : "#7A7A8D";
 
           return (
             <TouchableOpacity
@@ -72,12 +72,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeKey = "tickets", onSelec
                       name={item.icon}
                       size={20}
                       color={iconColor}
-                      style={{ marginRight: 14 }}
+                      style={{ marginLeft: 18 }}
                     />
                     {item.label === "Tickets" ? (
                       <MaskedView
                         maskElement={
-                          <Text style={{ fontSize: 16, fontWeight: "600", color: "#451268" }}>
+                          <Text style={{ fontSize: 16, fontWeight: "600", marginLeft: 14, color: "#B93F4B" }}>
                             {item.label}
                           </Text>
                         }

@@ -21,6 +21,7 @@ import Svg, {
   Text as SvgText,
 } from "react-native-svg";
 import Sidebar from "../components/Sidebar";
+import TicketList from "../components/TicketList";
 import Topbar from "../components/Topbar";
 import { useTicketData } from "../hooks/useTicketData";
 import { callSparkAI, type FlowiseHistoryMessage } from "../services/geminiService";
@@ -556,7 +557,6 @@ export default function Index() {
             activeOpacity={0.8}
             onPress={() => {
               handleSendToLLM("Ticket#20200521-5022024");
-              setShowFullscreenResponse(true);
               setHasStartedSpark(true);
             }}
             disabled={loading}
@@ -703,7 +703,7 @@ export default function Index() {
                 backgroundColor: "white",
                 borderRadius: 13,
                 padding: 20,
-                minHeight: 200,
+                minHeight: 230,
                 position: "relative",
               }}
             >
@@ -852,6 +852,8 @@ export default function Index() {
           </TouchableOpacity>
         </View>}
         
+          {/* TicketList ganz unten anzeigen */}
+          <TicketList />
           </ScrollView>
         </View>
       </View>
