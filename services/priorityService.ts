@@ -9,6 +9,13 @@ export interface PriorityPredictionPayload {
   Product: string;
   "Support Type": string;
   Status: string;
+  // optional / extra ticket fields we may want to provide for better predictions
+  "Case Number"?: string;
+  Subject?: string;
+  created?: string;
+  assigned_to?: string;
+  Priority?: string;
+  department?: string;
 }
 
 export interface PriorityPredictionResponse {

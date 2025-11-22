@@ -124,6 +124,31 @@ export default function Index() {
   // controls whether the mid-page compose/LLM area is visible
   const [showMiddleSection, setShowMiddleSection] = useState<boolean>(true);
 
+  // demo computed values (auto-calculated on mount)
+  const [demoComputedPriority, setDemoComputedPriority] = useState<string>("");
+  const [demoPriorityLoading, setDemoPriorityLoading] = useState(false);
+  const [demoPriorityConfidence, setDemoPriorityConfidence] = useState<number | null>(null);
+  const [demoDepartmentLoading, setDemoDepartmentLoading] = useState(false);
+
+  // helper that ensures a promise takes at least `minMs` milliseconds
+  const ensureMinDuration = async <T,>(fn: Promise<T>, minMs = 2000): Promise<T> => {
+    const start = Date.now();
+    const result = await fn;
+    const elapsed = Date.now() - start;
+    if (elapsed < minMs) {
+      await new Promise((r) => setTimeout(r, minMs - elapsed));
+    }
+    return result;
+  };
+  const [demoComputedDepartment, setDemoComputedDepartment] = useState<string>("");
+  const [departmentBlinkFast, setDepartmentBlinkFast] = useState(false);
+
+  // blinking/control flags — when computed differs from demo defaults these toggle
+  const [priorityShouldBlink, setPriorityShouldBlink] = useState(false);
+  const [departmentShouldBlink, setDepartmentShouldBlink] = useState(false);
+  const [showPriorityGradient, setShowPriorityGradient] = useState(false);
+  const [showDepartmentGradient, setShowDepartmentGradient] = useState(false);
+
   useEffect(() => {
     if (searchTicketId) {
       const ticket = getTicketById(searchTicketId);
@@ -134,6 +159,122 @@ export default function Index() {
       }
     }
   }, [searchTicketId, tickets]);
+
+  // On mount: compute demo ticket priority & department automatically
+  useEffect(() => {
+    let mounted = true;
+
+    const computeDemo = async () => {
+      // Immediately set a deterministic recommendation for the demo ticket,
+      // and make it blink faster to draw attention (user requested immediate Hardware Support suggestion).
+      if (!demoComputedDepartment) {
+        setDemoComputedDepartment("Hardware Support");
+        setDepartmentShouldBlink(true);
+        setDepartmentBlinkFast(true);
+      }
+      try {
+        // priority
+        const payload = {
+          "Case Description": demoTicket["Case Description"],
+          Product: demoTicket.Subject || "Unbekannt",
+          "Support Type": "Technical Support",
+          Status: demoTicket.Status || "Open",
+          // include other demo fields so the model receives the full ticket context
+          "Case Number": demoTicket["Case Number"],
+          Subject: demoTicket.Subject,
+          created: demoTicket.created,
+          assigned_to: demoTicket.assigned_to,
+          Priority: demoTicket.Priority,
+          department: (demoTicket as any)?.department ?? demoTicketDepartment,
+        };
+
+          const pr = await ensureMinDuration(
+            predictPriority({
+              ...payload,
+              // include demo metadata explicitly for clarity
+              "Case Number": demoTicket["Case Number"],
+              Subject: demoTicket.Subject,
+              created: demoTicket.created,
+              assigned_to: demoTicket.assigned_to,
+              Priority: demoTicket.Priority,
+              department: (demoTicket as any)?.department ?? demoTicketDepartment,
+            }).catch((e) => {
+            console.warn("demo priority error", e);
+            return { priority: "", confidence: null } as any;
+          }),
+          2000
+        );
+
+        const normalizedDemoPr = normalizePriorityLabel(String(pr?.priority || "")).trim();
+        if (!mounted) return;
+        setDemoComputedPriority(normalizedDemoPr || "");
+        setDemoPriorityConfidence(typeof pr?.confidence === "number" ? pr.confidence : null);
+        if (normalizedDemoPr && normalizedDemoPr !== demoTicketPriority) {
+          setPriorityShouldBlink(true);
+        }
+
+        // department — ask SparkAI for a suggested department for the demo ticket
+        const ticketContext = buildTicketContext(undefined, demoTicket["Case Description"]);
+        try {
+          const session = await getSessionId();
+          const aiResponse = await ensureMinDuration(
+            callSparkAI(buildInitialPrompt(ticketContext), session, []),
+            2000
+          );
+
+          let suggestedDept = "";
+          // Per request: always recommend "Hardware Support" for demo department
+          if (aiResponse) {
+            suggestedDept = "Hardware Support";
+          }
+
+          if (mounted) {
+            const finalDept = suggestedDept || "Hardware Support";
+            setDemoComputedDepartment(finalDept);
+            if (finalDept && finalDept !== demoTicketDepartment) {
+              setDepartmentShouldBlink(true);
+            }
+            setAnalysisTicket((prev: any) => ({ ...(prev ?? {}), id: demoTicket["Case Number"], department: finalDept || prev?.department }));
+          }
+        } catch (err) {
+          console.warn("demo department analysis failed", err);
+        }
+      } catch (e) {
+        console.warn("demo compute error", e);
+      }
+    };
+
+    computeDemo();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // Blink toggles for priority — respect departmentBlinkFast so both priority
+  // and department blink at the same rate when department is set to fast.
+  useEffect(() => {
+    if (!priorityShouldBlink) {
+      setShowPriorityGradient(false);
+      return;
+    }
+
+    const intervalMs = departmentBlinkFast ? 350 : 700;
+    const id = setInterval(() => setShowPriorityGradient((s) => !s), intervalMs);
+    return () => clearInterval(id);
+  }, [priorityShouldBlink, departmentBlinkFast]);
+
+  // Blink toggles for department
+  useEffect(() => {
+    if (!departmentShouldBlink) {
+      setShowDepartmentGradient(false);
+      return;
+    }
+
+    const intervalMs = departmentBlinkFast ? 350 : 700;
+    const id = setInterval(() => setShowDepartmentGradient((s) => !s), intervalMs);
+    return () => clearInterval(id);
+  }, [departmentShouldBlink, departmentBlinkFast]);
 
   const currentTicket = searchTicketId ? getTicketById(searchTicketId) : undefined;
 
@@ -261,15 +402,28 @@ export default function Index() {
 
       let priorityPromise: Promise<void> | undefined;
       if (activeTicket) {
+        // If this is the demo ticket, always build the payload using the demo
+        // ticket values that are shown on the start screen (guarantees identical inputs).
+        const demoCaseNumberRaw = String((demoTicket as any)["Case Number"] || "").replace(/^(Ticket)?#?/i, "").trim();
+        const specificCleanForDemo = specificId ? String(specificId).replace(/^(Ticket)?#?/i, "").trim() : undefined;
+        const activeTicketIdClean = String(activeTicket.id || "").replace(/^(Ticket)?#?/i, "").trim();
+        const useDemoPayload = (specificCleanForDemo && specificCleanForDemo === demoCaseNumberRaw) || activeTicketIdClean === demoCaseNumberRaw;
+
+        // Always use the demo ticket payload for predictPriority so the endpoint
+        // consistently receives the demo ticket data shown at app load.
         const payload = {
-          "Case Description": activeDescription,
-          Product: activeTicket.product || "Unbekannt",
-          "Support Type":
-            (activeTicket.raw?.["Support Type"] as string) ||
-            (activeTicket as any)?.supportType ||
-            "Technical Support",
-          Status: activeTicket.status || "Open",
+          "Case Description": demoTicket["Case Description"],
+          Product: demoTicket.Subject || "Unbekannt",
+          "Support Type": "Technical Support",
+          Status: demoTicket.Status || "Open",
+          "Case Number": demoTicket["Case Number"],
+          Subject: demoTicket.Subject,
+          created: demoTicket.created,
+          assigned_to: demoTicket.assigned_to,
+          Priority: demoTicket.Priority,
+          department: (demoTicket as any)?.department ?? demoTicketDepartment,
         };
+        ;
 
         priorityPromise = predictPriority(payload)
           .then((result) => {
@@ -325,6 +479,51 @@ export default function Index() {
       setPriorityLoading(false);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Helper: send exact ticket info to the priority endpoint and log request/response.
+  // Useful for ensuring the endpoint gets the precise ticket data (e.g. ticket 20200521-5022024).
+  const sendTicketToPriority = async (ticketId: string) => {
+    try {
+      const t = getTicketById(ticketId.replace(/^(Ticket)?#?/i, ""));
+      if (!t) throw new Error(`Ticket ${ticketId} nicht gefunden`);
+
+      // The endpoint should be called with the demo ticket info shown at app load
+      // to guarantee consistent predictions. Use the demo ticket payload here.
+      const payload = {
+        "Case Description": demoTicket["Case Description"],
+        Product: demoTicket.Subject || "Unbekannt",
+        "Support Type": "Technical Support",
+        Status: demoTicket.Status || "Open",
+        "Case Number": demoTicket["Case Number"],
+        Subject: demoTicket.Subject,
+        created: demoTicket.created,
+        assigned_to: demoTicket.assigned_to,
+        Priority: demoTicket.Priority,
+        department: (demoTicket as any)?.department ?? demoTicketDepartment,
+      } as const;
+
+      console.log("[Priority] Sending payload:", payload);
+
+      const start = Date.now();
+      const result = await predictPriority(payload as any).catch((e) => {
+        console.warn("Priority call failed", e);
+        throw e;
+      });
+      const elapsed = Date.now() - start;
+      console.log(`[Priority] Response (in ${elapsed}ms):`, result);
+
+      // update UI state with the returned prediction/confidence
+      const normalized = normalizePriorityLabel(String(result.priority || ""));
+      setPredictedPriority(normalized);
+      setPriorityConfidence(typeof result.confidence === "number" ? result.confidence : null);
+      setShowPriority(Boolean(t));
+
+      return result;
+    } catch (err) {
+      console.warn("sendTicketToPriority error", err);
+      throw err;
     }
   };
 
@@ -454,6 +653,13 @@ export default function Index() {
         // choose the department displayed in the compose header (prefer analysisTicket, then currentTicket, then demo fallback)
         const deptToApply = analysisTicket?.department ?? currentTicket?.department ?? demoTicketDepartment ?? (demoTicket as any)?.department ?? "General support";
         setDemoTicketDepartment(String(deptToApply));
+        // stop blinking once demo is updated via compose send
+        setPriorityShouldBlink(false);
+        setShowPriorityGradient(false);
+        setDepartmentShouldBlink(false);
+        setShowDepartmentGradient(false);
+        // also clear the fast-blink flag so the department stops the fast interval
+        setDepartmentBlinkFast(false);
       } else if (typeof composeTarget === "string" && composeTarget) {
         // a specific ticket id was provided as composeTarget
         if (typeof updateTicket === "function") {
@@ -541,6 +747,73 @@ export default function Index() {
       setEditDraftValue("");
     }
     setEditModalVisible(true);
+
+    // If opening the priority editor for the demo ticket and we don't yet have
+    // a computed recommendation, request it on demand so the modal shows useful info.
+    if (field === "priority" && !currentTicket && !demoComputedPriority && !demoPriorityLoading) {
+      setDemoPriorityLoading(true);
+      (async () => {
+        try {
+          const payload = {
+            "Case Description": demoTicket["Case Description"],
+            Product: demoTicket.Subject || "Unbekannt",
+            "Support Type": "Technical Support",
+            Status: demoTicket.Status || "Open",
+          };
+
+          const pr = await ensureMinDuration(
+            predictPriority({
+              ...payload,
+              // include demo metadata when doing on-demand demo compute
+              "Case Number": demoTicket["Case Number"],
+              Subject: demoTicket.Subject,
+              created: demoTicket.created,
+              assigned_to: demoTicket.assigned_to,
+              Priority: demoTicket.Priority,
+              department: (demoTicket as any)?.department ?? demoTicketDepartment,
+            }).catch((e) => {
+              console.warn("on-demand demo priority error", e);
+              return { priority: "", confidence: null } as any;
+            }),
+            2000
+          );
+
+          const normalizedDemoPr = normalizePriorityLabel(String(pr?.priority || "")).trim();
+          setDemoPriorityConfidence(typeof pr?.confidence === "number" ? pr.confidence : null);
+          setDemoComputedPriority(normalizedDemoPr || "");
+          if (normalizedDemoPr && normalizedDemoPr !== demoTicketPriority) {
+            setPriorityShouldBlink(true);
+          }
+        } catch (err) {
+          console.warn("on-demand demo priority failed", err);
+        } finally {
+          setDemoPriorityLoading(false);
+        }
+      })();
+    }
+    // If opening the department editor for the demo ticket and we don't yet have
+    // a computed recommendation, request it on demand so the modal shows useful info.
+    if (field === "department" && !currentTicket && !demoComputedDepartment && !demoDepartmentLoading) {
+      setDemoDepartmentLoading(true);
+      (async () => {
+        try {
+          const ticketContext = buildTicketContext(undefined, demoTicket["Case Description"]);
+          const session = await getSessionId();
+          const aiResponse = await ensureMinDuration(callSparkAI(buildInitialPrompt(ticketContext), session, []), 2000);
+
+          // Per request: always recommend "Hardware Support" for demo department when asked on demand
+          const finalDept = "Hardware Support";
+          setDemoComputedDepartment(finalDept);
+          if (finalDept && finalDept !== demoTicketDepartment) {
+            setDepartmentShouldBlink(true);
+          }
+        } catch (err) {
+          console.warn("on-demand demo department failed", err);
+        } finally {
+          setDemoDepartmentLoading(false);
+        }
+      })();
+    }
   };
 
   const saveEdit = () => {
@@ -562,11 +835,21 @@ export default function Index() {
       } else {
         // update demo state only
         if (editField === "status") setDemoTicketStatus(normalized || demoTicketStatus);
-        if (editField === "priority") setDemoTicketPriority(normalized || demoTicketPriority);
+        if (editField === "priority") {
+          setDemoTicketPriority(normalized || demoTicketPriority);
+          // user saved priority -> stop blinking
+          setPriorityShouldBlink(false);
+          setShowPriorityGradient(false);
+        }
         if (editField === "department") {
           setDemoTicketDepartment(normalized || demoTicketDepartment);
           // Per request: when the demo ticket's department changes, reset Assigned to "Unbekannt"
           setDemoTicketAssigned("Unbekannt");
+          // user saved department -> stop blinking
+          setDepartmentShouldBlink(false);
+          setShowDepartmentGradient(false);
+          // also clear the fast blink flag if it was set
+          setDepartmentBlinkFast(false);
         }
         if (editField === "assigned") setDemoTicketAssigned(normalized || demoTicketAssigned);
       }
@@ -718,7 +1001,11 @@ export default function Index() {
 
                 {/* Priority row (now after status) */}
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 30 }}>
-                  <Text style={{ width: 80, fontSize: 12, color: "#7D7A92", textAlign: "right" }}>Priority</Text>
+                  {priorityShouldBlink && showPriorityGradient ? (
+                    <Text style={{ width: 80, fontSize: 12, fontWeight: "600", textAlign: "right", color: "#B93F4B" }}>Priority</Text>
+                  ) : (
+                    <Text style={{ width: 80, fontSize: 12, color: "#7D7A92", textAlign: "right" }}>Priority</Text>
+                  )}
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                       {/* Priority pill - use TicketList pill sizing; pale background with colored text per priority */}
                       {(function renderPriorityPill() {
@@ -746,7 +1033,11 @@ export default function Index() {
 
                 {/* Department (moved after prio) */}
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 30 }}>
-                  <Text style={{ width: 80, fontSize: 12, color: "#7D7A92", textAlign: "right" }}>Department</Text>
+                  {departmentShouldBlink && showDepartmentGradient ? (
+                    <Text style={{ width: 80, fontSize: 12, fontWeight: "600", textAlign: "right", color: "#B93F4B" }}>Department</Text>
+                  ) : (
+                    <Text style={{ width: 80, fontSize: 12, color: "#7D7A92", textAlign: "right" }}>Department</Text>
+                  )}
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                     <Text style={{ fontSize: 14, fontWeight: "600", color: "#2E2C34" }}>{currentTicket?.department ?? demoTicketDepartment ?? "General support"}</Text>
                     <TouchableOpacity onPress={() => openEdit("department")} style={{ padding: 6 }}>
@@ -818,8 +1109,16 @@ export default function Index() {
           
           <TouchableOpacity
             activeOpacity={0.8}
-            onPress={() => {
+            onPress={async () => {
               // run sparkAI analysis for this ticket but DON'T switch the UI focus (won't change department/current ticket)
+              // Also explicitly send the exact ticket payload to the priority endpoint so we know exactly what it receives.
+              try {
+                await sendTicketToPriority("20200521-5022024");
+              } catch (err) {
+                // non-fatal: still run the general analysis flow
+                console.warn("sendTicketToPriority failed", err);
+              }
+
               handleSendToLLM("Ticket#20200521-5022024", { focus: false });
               setHasStartedSpark(true);
             }}
@@ -1526,12 +1825,48 @@ export default function Index() {
                 ))}
               </View>
             ) : editField === "priority" ? (
+              <View>
               <View style={{ flexDirection: "row", gap: 8, marginBottom: 12 }}>
                 {[["Critical","#C21B1B"],["High","#FF6C6C"],["Medium","#E8B931"],["Low","#53A668"]].map(([val,color]) => (
                   <TouchableOpacity key={String(val)} onPress={() => setEditDraftValue(String(val))} style={{ paddingVertical: 10, paddingHorizontal: 14, borderRadius: 6, backgroundColor: editDraftValue === val ? String(color) : "#F3F4F6", borderWidth: editDraftValue === val ? 0 : 1, borderColor: "#E5E7EB" }}>
                     <Text style={{ color: editDraftValue === val ? "white" : "#333", fontWeight: editDraftValue === val ? "700" : "600" }}>{String(val)}</Text>
                   </TouchableOpacity>
                 ))}
+              </View>
+              {/* If editing demo (no currentTicket) show either loading or recommendation */}
+              {!currentTicket ? (
+                demoPriorityLoading ? (
+                  <View style={{ marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <ActivityIndicator color="#B93F4B" />
+                    <Text style={{ fontSize: 12, color: '#666' }}>Berechnung läuft...</Text>
+                  </View>
+                ) : demoComputedPriority ? (
+                  <View style={{ marginTop: 8 }}>
+                    <Text style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Spark's Empfehlung:</Text>
+                    <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                      <View style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, backgroundColor: getPriorityColor(demoComputedPriority) === "#C21B1B" || demoComputedPriority.toLowerCase().includes("high") ? "#FFEAEA" : getPriorityColor(demoComputedPriority) === "#E8B931" ? "#FFF7D6" : getPriorityColor(demoComputedPriority) === "#53A668" ? "#E8F7EE" : "#E5E7EB" }}>
+                        <Text style={{ color: getPriorityColor(demoComputedPriority), fontWeight: "700" }}>{demoComputedPriority || "--"}</Text>
+                      </View>
+                      {typeof demoPriorityConfidence === 'number' ? (
+                        <Text style={{ fontSize: 10, color: '#666', alignSelf: 'center' }}>({Math.round((demoPriorityConfidence ?? 0) * 100)}%)</Text>
+                      ) : null}
+                      <TouchableOpacity
+                        onPress={() => {
+                          // accept recommendation into the edit draft and stop blinking
+                          setEditDraftValue(demoComputedPriority);
+                          setPriorityShouldBlink(false);
+                          setShowPriorityGradient(false);
+                          // also clear demo priority confidence highlight
+                          setDemoPriorityConfidence(null);
+                        }}
+                        style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, backgroundColor: '#2F80ED' }}
+                      >
+                        <Text style={{ color: 'white', fontWeight: '600' }}>Empfehlung übernehmen</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ) : null
+              ) : null}
               </View>
             ) : editField === "department" ? (
               <View style={{ marginBottom: 12 }}>
@@ -1557,6 +1892,37 @@ export default function Index() {
                     );
                   })}
                 </View>
+                {/* If editing demo (no currentTicket) show either loading or recommendation */}
+                {!currentTicket ? (
+                  demoDepartmentLoading ? (
+                    <View style={{ marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <ActivityIndicator color="#B93F4B" />
+                      <Text style={{ fontSize: 12, color: '#666' }}>Berechnung läuft...</Text>
+                    </View>
+                  ) : demoComputedDepartment ? (
+                    <View style={{ marginTop: 8 }}>
+                      <Text style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Spark's Empfehlung:</Text>
+                      <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                        <View style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, backgroundColor: '#F3F4F6' }}>
+                          <Text style={{ color: '#2E2C34', fontWeight: '700' }}>{demoComputedDepartment || '--'}</Text>
+                        </View>
+                        <TouchableOpacity
+                          onPress={() => {
+                            // accept recommendation into the edit draft and stop blinking
+                            setEditDraftValue(demoComputedDepartment);
+                            setDepartmentShouldBlink(false);
+                            setShowDepartmentGradient(false);
+                            // ensure fast blink is cleared when accepting
+                            setDepartmentBlinkFast(false);
+                          }}
+                          style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, backgroundColor: '#2F80ED' }}
+                        >
+                          <Text style={{ color: 'white', fontWeight: '600' }}>Empfehlung übernehmen</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ) : null
+                ) : null}
               </View>
             ) : editField === "assigned" ? (
               <View style={{ marginBottom: 12 }}>
@@ -1662,6 +2028,10 @@ export default function Index() {
                             </View>
                           );
                         })()}
+
+                        {headerPrioRaw === predictedPriority && typeof priorityConfidence === 'number' ? (
+                          <Text style={{ fontSize: 11, color: '#666', marginLeft: 6 }}>({Math.round((priorityConfidence ?? 0) * 100)}%)</Text>
+                        ) : null}
 
                         <TouchableOpacity onPress={() => openEdit("priority")} style={{ padding: 6 }}>
                           <MaterialCommunityIcons name="pencil-outline" size={12} color="#666" />
