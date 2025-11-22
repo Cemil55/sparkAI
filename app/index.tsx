@@ -563,7 +563,11 @@ export default function Index() {
         // update demo state only
         if (editField === "status") setDemoTicketStatus(normalized || demoTicketStatus);
         if (editField === "priority") setDemoTicketPriority(normalized || demoTicketPriority);
-        if (editField === "department") setDemoTicketDepartment(normalized || demoTicketDepartment);
+        if (editField === "department") {
+          setDemoTicketDepartment(normalized || demoTicketDepartment);
+          // Per request: when the demo ticket's department changes, reset Assigned to "Unbekannt"
+          setDemoTicketAssigned("Unbekannt");
+        }
         if (editField === "assigned") setDemoTicketAssigned(normalized || demoTicketAssigned);
       }
     } catch (e) {
@@ -1609,19 +1613,13 @@ export default function Index() {
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 16 }}>
                 {/* Ticket number on the left */}
-                <Text style={{ fontWeight: "700", fontSize: 16 }}>{`Ticket# ${currentTicket?.id ?? demoTicket["Case Number"]}`}</Text>
+                <Text style={{ fontWeight: "700", fontSize: 16 }}>{currentTicket?.id ?? demoTicket["Case Number"]}</Text>
                 <View style={{ width: 12 }} />
                 {/* Prio */}
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                   <View style={{ width: 80, height: 16 }}>
                     <Svg width="100%" height="100%">
-                      <Defs>
-                        <SvgLinearGradient id="prio-modal-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                          <Stop offset="0%" stopColor="#B93F4B" />
-                          <Stop offset="100%" stopColor="#451268" />
-                        </SvgLinearGradient>
-                      </Defs>
-                      <SvgText fill="url(#prio-modal-gradient)" fontSize="12" fontWeight="bold" x="100%" textAnchor="end" y="12">Prio:</SvgText>
+                      <SvgText fill="#6f6f6fff" fontSize="13" x="100%" textAnchor="end" y="12">Priority:</SvgText>
                     </Svg>
                   </View>
 
@@ -1642,11 +1640,29 @@ export default function Index() {
                       : "#E5E7EB";
                     const showPrio = Boolean(headerPrioLabel);
 
+                    // Render the priority pill to match the demo card style: pale background with colored text
                     return (
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                        <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, backgroundColor: showPrio ? headerPrioColor : "#E5E7EB" }}>
-                          <Text style={{ color: showPrio ? "white" : "#666", fontWeight: "700", fontSize: 12 }}>{showPrio ? headerPrioLabel : "--"}</Text>
-                        </View>
+                        {(function () {
+                          const p = String(headerPrioLabel || "").toLowerCase();
+                          const textColor = getPriorityColor(headerPrioLabel);
+                          const bg = p.includes("critical") || p.includes("high")
+                            ? "#FFEAEA"
+                            : p.includes("medium")
+                            ? "#FFF7D6"
+                            : p.includes("low")
+                            ? "#E8F7EE"
+                            : "#E5E7EB";
+
+                          const show = Boolean(headerPrioLabel);
+
+                          return (
+                            <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, backgroundColor: show ? bg : "#E5E7EB" }}>
+                              <Text style={{ color: show ? textColor : "#666", fontWeight: "700", fontSize: 12 }}>{show ? headerPrioLabel : "--"}</Text>
+                            </View>
+                          );
+                        })()}
+
                         <TouchableOpacity onPress={() => openEdit("priority")} style={{ padding: 6 }}>
                           <MaterialCommunityIcons name="pencil-outline" size={12} color="#666" />
                         </TouchableOpacity>
@@ -1658,20 +1674,28 @@ export default function Index() {
 
                 {/* Abteilung */}
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-                  <View style={{ width: 80, height: 16,marginLeft:50 }}>
+                  <View style={{ width: 80, height: 16,marginLeft:20 }}>
                     <Svg width="100%" height="100%">
-                      <Defs>
-                        <SvgLinearGradient id="abteilung-modal-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                          <Stop offset="0%" stopColor="#B93F4B" />
-                          <Stop offset="100%" stopColor="#451268" />
-                        </SvgLinearGradient>
-                      </Defs>
-                      <SvgText fill="url(#abteilung-modal-gradient)" fontSize="12" fontWeight="bold" x="100%" textAnchor="end" y="12">Abteilung:</SvgText>
+                      <SvgText fill="#6f6f6fff" fontSize="13" x="100%" textAnchor="end" y="12">Department:</SvgText>
                     </Svg>
                   </View>
 
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 4 }}>
-                    <Text style={{ fontSize: 12, color: "#666" }}>{analysisTicket?.department ?? currentTicket?.department ?? (demoTicket as any)?.department ?? (demoTicket as any)?.product ?? "Unbekannt"}</Text>
+                    {(function () {
+                      const deptLabel = composeTarget === "demo"
+                        ? (analysisTicket && llmResponse && !loading
+                            ? (analysisTicket?.department ?? demoTicketDepartment)
+                            : demoTicketDepartment)
+                        : analysisTicket?.department ?? currentTicket?.department ?? (demoTicket as any)?.department ?? (demoTicket as any)?.product ?? "Unbekannt";
+
+                      // Use a pale background + darker text so department looks like a pill similar to priority
+                      return (
+                        <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, backgroundColor: showRightBadges ? "#F3F4F6" : "#E5E7EB" }}>
+                          <Text style={{ fontSize: 12, color: "#2E2C34", fontWeight: "600" }}>{deptLabel}</Text>
+                        </View>
+                      );
+                    })()}
+                    
                     <TouchableOpacity onPress={() => openEdit("department")} style={{ padding: 6 }}>
                       <MaterialCommunityIcons name="pencil-outline" size={12} color="#666" />
                     </TouchableOpacity>
