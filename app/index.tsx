@@ -677,23 +677,10 @@ export default function Index() {
               </Text>
 
               <View style={{ flexDirection: "row", justifyContent: "flex-start", alignItems: "center", marginTop: 50 }}>
-                <View
-                  style={{
-                    width: 44,
-                    height: 44,
-                    borderRadius: 22,
-                    backgroundColor: "#E10000",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    overflow: "hidden",
-                    marginRight: 12,
-                  }}
-                >
-                  <Image
-                    source={require("../assets/images/SBB.png")}
-                    style={{ width: 28, height: 28, resizeMode: "contain" }}
-                  />
-                </View>
+                <Image
+                  source={require("../assets/images/SBB.png")}
+                  style={{ width: 40, height: 40, borderRadius: 20, marginRight: 18 }}
+                />
                 <View>
                   <Text style={{ fontSize: 14, fontWeight: "600", color: "#727272" }}>
                     SBB CFF FFS

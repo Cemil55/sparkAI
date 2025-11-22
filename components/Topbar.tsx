@@ -65,7 +65,7 @@ export const Topbar: React.FC<TopbarProps> = ({
               x="0"
               y="20"
             >
-              {`Welcome! ${userName}`}
+           
             </SvgText>
           </Svg>
         </View>
