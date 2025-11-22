@@ -95,6 +95,8 @@ export default function Index() {
   const [messages, setMessages] = useState<FlowiseHistoryMessage[]>([]);
   const [hasStartedSpark, setHasStartedSpark] = useState(false);
   const [showComposeModal, setShowComposeModal] = useState(false);
+  // last ticket object we asked SparkAI to analyze (used for inline badges when we don't switch UI focus)
+  const [analysisTicket, setAnalysisTicket] = useState<any | null>(null);
   const [composeTo, setComposeTo] = useState("Support@SBB.ch");
   const [composeCc, setComposeCc] = useState("");
   const [composeSubject, setComposeSubject] = useState("");
@@ -109,6 +111,14 @@ export default function Index() {
   // local state for demo ticket card (so compose sends can update the demo display)
   const [demoTicketStatus, setDemoTicketStatus] = useState<string>(demoTicket.Status);
   const [demoTicketPriority, setDemoTicketPriority] = useState<string>(normalizePriorityLabel(demoTicket.Priority));
+  // demo department — demo JSON doesn't include this so default to General support
+  const [demoTicketDepartment, setDemoTicketDepartment] = useState<string>(
+    (demoTicket as any)?.department ?? "General support"
+  );
+  // demo assigned (demo JSON includes assigned_to) - default to Michael Fischer
+  const [demoTicketAssigned, setDemoTicketAssigned] = useState<string>(
+    (demoTicket as any)?.assigned_to ?? "Michael Fischer"
+  );
   // tracks where the compose modal was opened for — 'demo' or a ticket id
   const [composeTarget, setComposeTarget] = useState<string | "demo" | null>(null);
   // controls whether the mid-page compose/LLM area is visible
@@ -193,7 +203,10 @@ export default function Index() {
     }
   };
 
-  const handleSendToLLM = async (overrideTicketId?: string | any) => {
+  // overrideTicketId: optional id to analyze
+  // opts.focus: when false, we run analysis for the id but DO NOT switch the UI to that ticket
+  const handleSendToLLM = async (overrideTicketId?: string | any, opts?: { focus?: boolean }) => {
+    const focus = opts?.focus ?? true;
     const specificId = typeof overrideTicketId === "string" ? overrideTicketId : undefined;
     let activeTicket = currentTicket;
     let activeDescription = description;
@@ -206,14 +219,27 @@ export default function Index() {
       }
       
       if (t) {
+        // remember what ticket was analyzed so the inline badges can show info
+        setAnalysisTicket(t);
         activeTicket = t;
         activeDescription = t.description;
-        setSearchTicketId(t.id);
-        setDescription(t.description);
-        setHasSentInitialPrompt(false);
-        conversationHistoryRef.current = [];
-        setMessages([]);
+        // By default we focus the found ticket in the UI, but callers can opt out
+        if (focus) {
+          setSearchTicketId(t.id);
+          setDescription(t.description);
+          setHasSentInitialPrompt(false);
+          conversationHistoryRef.current = [];
+          setMessages([]);
+        }
+      } else {
+        // no ticket found, clear analysisTicket so inline badges don't stick
+        setAnalysisTicket(null);
       }
+    }
+
+    // if no specific id provided, analyze the current ticket and remember it
+    if (!specificId && activeTicket) {
+      setAnalysisTicket(activeTicket);
     }
 
     if (!activeDescription || activeDescription === "Ticket nicht gefunden") {
@@ -422,8 +448,12 @@ export default function Index() {
 
       // Decide which target to update: explicit composeTarget if provided, otherwise prefer currentTicket
       if (composeTarget === "demo") {
+        // Update demo card both status, priority and adopt the department currently shown in the compose header
         setDemoTicketStatus("Closed");
         setDemoTicketPriority(normalizedPriority);
+        // choose the department displayed in the compose header (prefer analysisTicket, then currentTicket, then demo fallback)
+        const deptToApply = analysisTicket?.department ?? currentTicket?.department ?? demoTicketDepartment ?? (demoTicket as any)?.department ?? "General support";
+        setDemoTicketDepartment(String(deptToApply));
       } else if (typeof composeTarget === "string" && composeTarget) {
         // a specific ticket id was provided as composeTarget
         if (typeof updateTicket === "function") {
@@ -453,8 +483,14 @@ export default function Index() {
     // hide the mid-page compose/LLM area (between the demo input and Last Tickets)
     setShowMiddleSection(false);
 
-    // show feedback modal immediately (we still gather feedback)
-    setShowFeedbackModal(true);
+    // show feedback modal only when Spark AI actually produced a solution suggestion
+    // (not when it's still loading or returned an error)
+    const llmText = String(llmResponse || "").trim();
+    const isLLMPlaceholder = llmText === "Spark AI generiert Lösungsvorschlag" || llmText === "__LOADING__";
+    const isLLMError = llmText.startsWith("Fehler");
+    if (llmText && !loading && !isLLMPlaceholder && !isLLMError) {
+      setShowFeedbackModal(true);
+    }
   };
 
   // feedback modal state
@@ -483,10 +519,74 @@ export default function Index() {
     setComposeBody(text);
   };
 
+  // edit UI/modal state for Status / Priority / Department
+  const [editModalVisible, setEditModalVisible] = useState(false);
+  const [editField, setEditField] = useState<"status" | "priority" | "department" | "assigned" | null>(null);
+  const [editDraftValue, setEditDraftValue] = useState<string>("");
+
+  const openEdit = (field: "status" | "priority" | "department" | "assigned") => {
+    setEditField(field);
+    // decide initial value (prefer currentTicket when available)
+    if (currentTicket) {
+      setEditDraftValue(String((currentTicket as any)[field] ?? ""));
+    } else if (field === "status") {
+      setEditDraftValue(demoTicketStatus);
+    } else if (field === "priority") {
+      setEditDraftValue(demoTicketPriority);
+    } else if (field === "department") {
+      setEditDraftValue(demoTicketDepartment);
+    } else if (field === "assigned") {
+      setEditDraftValue(demoTicketAssigned);
+    } else {
+      setEditDraftValue("");
+    }
+    setEditModalVisible(true);
+  };
+
+  const saveEdit = () => {
+    if (!editField) return setEditModalVisible(false);
+    const value = editDraftValue?.trim() ?? "";
+
+    // normalize priority if needed
+    const normalized = editField === "priority" ? normalizePriorityLabel(value) : value;
+
+    try {
+      if (currentTicket && typeof updateTicket === "function") {
+        // call updateTicket on the current ticket
+        // map local editField 'assigned' to backend 'assigned_to'
+        if (editField === "assigned") {
+          (updateTicket as any)(currentTicket.id, { assigned_to: normalized });
+        } else {
+          (updateTicket as any)(currentTicket.id, { [editField]: normalized });
+        }
+      } else {
+        // update demo state only
+        if (editField === "status") setDemoTicketStatus(normalized || demoTicketStatus);
+        if (editField === "priority") setDemoTicketPriority(normalized || demoTicketPriority);
+        if (editField === "department") setDemoTicketDepartment(normalized || demoTicketDepartment);
+        if (editField === "assigned") setDemoTicketAssigned(normalized || demoTicketAssigned);
+      }
+    } catch (e) {
+      console.warn("Failed saving edit", e);
+    }
+
+    setEditModalVisible(false);
+    setEditField(null);
+    setEditDraftValue("");
+  };
+
+  const cancelEdit = () => {
+    setEditModalVisible(false);
+    setEditField(null);
+    setEditDraftValue("");
+  };
+
   const inputWrapperStyle: StyleProp<ViewStyle> = description
     ? { marginTop: 20, marginBottom: 20, alignItems: "flex-start" }
     : { flex: 1, justifyContent: "center", alignItems: "center", marginBottom: 20 };
-  const showRightBadges = Boolean(showPriority && description && llmResponse && !loading);
+  // Show inline badges when we have an analyzed ticket (analysisTicket) or a focused ticket (currentTicket)
+  // -- remove requirement on `description` so analysis without switching focus still shows badges
+  const showRightBadges = Boolean(showPriority && llmResponse && !loading);
 
   useEffect(() => {
     if (!loading && !sendingUserResponse) {
@@ -555,102 +655,125 @@ export default function Index() {
             shadowOpacity: 0.08,
             shadowRadius: 20,
             elevation: 6,
-            gap: 18,
+            gap: 10,
           }}
         >
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              gap: 8,
-            }}
-          >
-            <Text
-              style={{ fontSize: 16, fontWeight: "700", color: "#27253D" }}
-              numberOfLines={1}
-            >
-              {demoTicket["Case Number"]}
-            </Text>
-            <View
-              style={{
-                paddingHorizontal: 18,
-                paddingVertical: 8,
-                borderRadius: 20,
-                backgroundColor:
-                  demoTicketStatus === "Closed"
-                    ? "#B7E2B7"
-                    : demoTicketStatus === "In Progress"
-                    ? "#D1D5DB"
-                    : "#5B60FF",
-              }}
-            >
-              <Text style={{ color: demoTicketStatus === "Closed" ? "#185C1E" : demoTicketStatus === "In Progress" ? "#666" : "white", fontWeight: "600", fontSize: 12 }}>
-                {demoTicketStatus}
-              </Text>
-            </View>
-
-            <View
-              style={{
-                paddingHorizontal: 18,
-                paddingVertical: 8,
-                borderRadius: 20,
-                backgroundColor: demoTicketPriority?.toLowerCase().includes("high") ? "#FF6C6C" : getPriorityColor(demoTicketPriority),
-              }}
-            >
-              <Text style={{ color: "white", fontWeight: "600", fontSize: 12 }}>
-                {demoTicketPriority}
-              </Text>
-            </View>
-
-            <Text style={{ fontSize: 12, color: "#7D7A92", marginLeft: "auto" }}>
-              {demoTicket.created ? `Created at ${demoTicket.created}` : ""}
-            </Text>
-          </View>
-
-          <Text style={{ fontSize: 20, fontWeight: "400", color: "#2E2C34" }}>
-            {demoTicket.Subject}
-          </Text>
-
-          <Text style={{ fontSize: 13, lineHeight: 20, color: "#5E5B73" }}>
-            {demoTicket["Case Description"]}
-          </Text>
-
-          <View
-            style={{
-              flexDirection: "row",
-              justifyContent: "space-between",
-              alignItems: "center",
-            }}
-          >
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-              <View
-                style={{
-                  width: 44,
-                  height: 44,
-                  borderRadius: 22,
-                  backgroundColor: "#E52C3B",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  overflow: "hidden",
-                }}
+          <View style={{ flexDirection: "row", gap: 20, alignItems: "flex-start" }}>
+            {/* left column: keep the original left side content (ticket number, subject, description, avatar) */}
+            <View style={{ flex: 1, gap: 8 }}>
+              <Text
+                style={{ fontSize: 16, fontWeight: "700", color: "#27253D" }}
+                numberOfLines={1}
               >
-                <Image
-                  source={require("../assets/images/SBB.png")}
-                  style={{ width: 28, height: 28, resizeMode: "contain" }}
-                />
-              </View>
-              <View>
-                <Text style={{ fontSize: 14, fontWeight: "600", color: "#727272" }}>
-                  SBB CFF FFS
-                </Text>
+                {demoTicket["Case Number"]}
+              </Text>
+
+              <Text style={{ fontSize: 20, fontWeight: "400", color: "#2E2C34" }}>
+                {demoTicket.Subject}
+              </Text>
+
+              <Text style={{ fontSize: 13, lineHeight: 20, color: "#5E5B73" }}>
+                {demoTicket["Case Description"]}
+              </Text>
+
+              <View style={{ flexDirection: "row", justifyContent: "flex-start", alignItems: "center", marginTop: 50 }}>
+                <View
+                  style={{
+                    width: 44,
+                    height: 44,
+                    borderRadius: 22,
+                    backgroundColor: "#E10000",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    overflow: "hidden",
+                    marginRight: 12,
+                  }}
+                >
+                  <Image
+                    source={require("../assets/images/SBB.png")}
+                    style={{ width: 28, height: 28, resizeMode: "contain" }}
+                  />
+                </View>
+                <View>
+                  <Text style={{ fontSize: 14, fontWeight: "600", color: "#727272" }}>
+                    SBB CFF FFS
+                  </Text>
+                </View>
               </View>
             </View>
-            <View style={{ alignItems: "flex-end" }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                <Text style={{ fontSize: 12, color: "#7D7A92" }}>Assigned to</Text>
-                <Text style={{ fontSize: 14, fontWeight: "600", color: "#2E2C34" }}>
-                  {demoTicket.assigned_to}
-                </Text>
+
+            {/* right column: dedicated stacked block for Created / Abteilung / Status / Prio */}
+            <View style={{ width: 240, alignItems: "flex-start" }}>
+              <View style={{ marginTop: 0, alignItems: "flex-start" }}>
+                {/* Created row (top) */}
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 30 }}>
+                  <Text style={{ width: 80, fontSize: 12, color: "#7D7A92", textAlign: "right" }}>Created</Text>
+                  <Text style={{ fontSize: 12, color: "#7D7A92", marginLeft: 8 }}>{demoTicket.created ?? ""}</Text>
+                </View>
+
+                {/* Status row (moved up) */}
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 30 }}>
+                  <Text style={{ width: 80, fontSize: 12, color: "#7D7A92", textAlign: "right" }}>Status</Text>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    {/* Status pill - match TicketList style */}
+                    <View style={{ backgroundColor: demoTicketStatus === "Closed" ? "#B7E2B7" : demoTicketStatus === "In Progress" ? "#D1D5DB" : "#5B60FF", borderRadius: 8, width: 120, paddingVertical: 8, alignItems: "center", justifyContent: "center", marginRight: 6 }}>
+                      <Text style={{ color: demoTicketStatus === "Closed" ? "#185C1E" : demoTicketStatus === "In Progress" ? "#666" : "white", fontWeight: "600", fontSize: 15, textAlign: "center", width: "100%" }}>{demoTicketStatus}</Text>
+                    </View>
+                    <TouchableOpacity onPress={() => openEdit("status")} style={{ padding: 6 }}>
+                      <MaterialCommunityIcons name="pencil-outline" size={14} color="#666" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Priority row (now after status) */}
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 30 }}>
+                  <Text style={{ width: 80, fontSize: 12, color: "#7D7A92", textAlign: "right" }}>Priority</Text>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                      {/* Priority pill - use TicketList pill sizing; pale background with colored text per priority */}
+                      {(function renderPriorityPill() {
+                        const p = String(demoTicketPriority || "").toLowerCase();
+                        const textColor = getPriorityColor(demoTicketPriority);
+                        const bg = p.includes("critical") || p.includes("high")
+                          ? "#FFEAEA"
+                          : p.includes("medium")
+                          ? "#FFF7D6"
+                          : p.includes("low")
+                          ? "#E8F7EE"
+                          : "#E5E7EB";
+
+                        return (
+                          <View style={{ backgroundColor: bg, borderRadius: 8, width: 120, paddingVertical: 8, alignItems: "center", justifyContent: "center" }}>
+                            <Text style={{ color: textColor, fontWeight: "600", fontSize: 15, textAlign: "center", width: "100%" }}>{demoTicketPriority || "--"}</Text>
+                          </View>
+                        );
+                      })()}
+                    <TouchableOpacity onPress={() => openEdit("priority")} style={{ padding: 6 }}>
+                      <MaterialCommunityIcons name="pencil-outline" size={14} color="#666" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Department (moved after prio) */}
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 30 }}>
+                  <Text style={{ width: 80, fontSize: 12, color: "#7D7A92", textAlign: "right" }}>Department</Text>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    <Text style={{ fontSize: 14, fontWeight: "600", color: "#2E2C34" }}>{currentTicket?.department ?? demoTicketDepartment ?? "General support"}</Text>
+                    <TouchableOpacity onPress={() => openEdit("department")} style={{ padding: 6 }}>
+                      <MaterialCommunityIcons name="pencil-outline" size={14} color="#666" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Assigned row */}
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <Text style={{ width: 80, fontSize: 12, color: "#7D7A92", textAlign: "right" }}>Assigned</Text>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    <Text style={{ fontSize: 14, fontWeight: "600", color: "#2E2C34" }}>{(currentTicket as any)?.assigned_to ?? demoTicketAssigned ?? (demoTicket as any)?.assigned_to ?? "Michael Fischer"}</Text>
+                    <TouchableOpacity onPress={() => openEdit("assigned")} style={{ padding: 6 }}>
+                      <MaterialCommunityIcons name="pencil-outline" size={14} color="#666" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
               </View>
             </View>
           </View>
@@ -705,7 +828,8 @@ export default function Index() {
           <TouchableOpacity
             activeOpacity={0.8}
             onPress={() => {
-              handleSendToLLM("Ticket#20200521-5022024");
+              // run sparkAI analysis for this ticket but DON'T switch the UI focus (won't change department/current ticket)
+              handleSendToLLM("Ticket#20200521-5022024", { focus: false });
               setHasStartedSpark(true);
             }}
             disabled={loading}
@@ -750,8 +874,8 @@ export default function Index() {
           </TouchableOpacity>
         </View>
         {hasStartedSpark && (
-        <View style={{ flexDirection: "row", gap: 8, marginBottom: 12, marginTop: 24 }}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 25 }}>
+        <View style={{ flexDirection: "row", gap: 8, marginBottom: 20, marginTop: 32 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 32 }}>
               <View style={{ width: 40, height: 15 }}>
                 <Svg width="100%" height="100%">
                   <Defs>
@@ -778,7 +902,7 @@ export default function Index() {
                   alignItems: "center",
                   gap: 6,
                   paddingHorizontal: 12,
-                  paddingVertical: 8,
+                  paddingVertical: 10,
                   borderRadius: 20,
                   backgroundColor: showRightBadges ? priorityBadgeColor : "#E5E7EB",
                 }}
@@ -786,6 +910,7 @@ export default function Index() {
                 <Text style={{ fontSize: 12, fontWeight: "bold", color: showRightBadges ? (priorityFromEndpoint ? "white" : "#666") : "#333" }}>
                   {showRightBadges ? priorityTextUpper || "--" : "--"}
                 </Text>
+                {/* priority edit removed for inline badges */}
                 {showRightBadges && showPriorityConfidence ? (
                   <Text style={{ fontSize: 10, color: "white" }}>
                     ({Math.round((priorityConfidence ?? 0) * 100)}%)
@@ -794,7 +919,7 @@ export default function Index() {
               </View>
             </View>
 
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 25,marginLeft: 40 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 32, marginLeft: 44 }}>
               <View style={{ width: 75, height: 15 }}>
                 <Svg width="100%" height="100%">
                   <Defs>
@@ -820,14 +945,17 @@ export default function Index() {
                   alignItems: "center",
                   gap: 6,
                   paddingHorizontal: 12,
-                  paddingVertical: 8,
+                  paddingVertical: 10,
                   borderRadius: 20,
                   backgroundColor: showRightBadges ? "#F3F4F6" : "#E5E7EB",
                 }}
               >
                 <Text style={{ fontSize: 12, color: "#333" }}>
-                  {showRightBadges ? currentTicket?.department || "Unbekannt" : "--"}
+                  {showRightBadges
+                    ? (analysisTicket?.department ?? currentTicket?.department ?? demoTicketDepartment ?? "Unbekannt")
+                    : "--"}
                 </Text>
+                {/* inline department edit icon removed per UX request (keeps fullscreen/modal editor intact) */}
               </View>
             </View>
           </View>)}
@@ -1190,9 +1318,9 @@ export default function Index() {
               )}
             </ScrollView>
             
-            <View style={{ flexDirection: "row", gap: 8, marginBottom: 12, marginTop: 24, paddingHorizontal: 10 }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 25 }}>
-                <View style={{ width: 40, height: 15 }}>
+            <View style={{ flexDirection: "row", gap: 8, marginBottom: 20, marginTop: 32, paddingHorizontal: 10,marginLeft: -50 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 32 }}>
+                <View style={{ width: 80, height: 15 }}>
                   <Svg width="100%" height="100%">
                     <Defs>
                       <SvgLinearGradient id="prio-fullscreen-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -1204,20 +1332,22 @@ export default function Index() {
                       fill="url(#prio-fullscreen-gradient)"
                       fontSize="12"
                       fontWeight="bold"
-                      x="0"
+                      x="100%"
+                      textAnchor="end"
                       y="11"
                     >
                       Prio:
                     </SvgText>
                   </Svg>
                 </View>
+
                 <View
                   style={{
                     flexDirection: "row",
                     alignItems: "center",
                     gap: 6,
                     paddingHorizontal: 12,
-                    paddingVertical: 8,
+                    paddingVertical: 10,
                     borderRadius: 20,
                     backgroundColor: showRightBadges ? priorityBadgeColor : "#E5E7EB",
                   }}
@@ -1233,8 +1363,8 @@ export default function Index() {
                 </View>
               </View>
 
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 25,marginLeft: 40 }}>
-                <View style={{ width: 75, height: 15 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 32, marginLeft: 0 }}>
+                <View style={{ width: 80, height: 15 }}>
                   <Svg width="100%" height="100%">
                     <Defs>
                       <SvgLinearGradient id="abteilung-fullscreen-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -1246,7 +1376,8 @@ export default function Index() {
                       fill="url(#abteilung-fullscreen-gradient)"
                       fontSize="12"
                       fontWeight="bold"
-                      x="0"
+                      x="100%"
+                      textAnchor="end"
                       y="11"
                     >
                       Abteilung:
@@ -1265,7 +1396,9 @@ export default function Index() {
                   }}
                 >
                   <Text style={{ fontSize: 12, color: "#333" }}>
-                    {showRightBadges ? currentTicket?.department || "Unbekannt" : "--"}
+                    {showRightBadges
+                      ? (analysisTicket?.department ?? currentTicket?.department ?? demoTicketDepartment ?? "Unbekannt")
+                      : "--"}
                   </Text>
                 </View>
               </View>
@@ -1382,6 +1515,101 @@ export default function Index() {
         </View>
       </Modal>
 
+      {/* Edit modal for Status / Priority / Department */}
+      <Modal
+        visible={editModalVisible}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={cancelEdit}
+      >
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: 24 }}>
+          <View style={{ backgroundColor: "white", borderRadius: 8, padding: 18, maxWidth: 720, width: "100%", alignSelf: "center" }}>
+            <Text style={{ fontSize: 16, fontWeight: "700", marginBottom: 12 }}>{editField ? `Edit ${editField.charAt(0).toUpperCase() + editField.slice(1)}` : "Edit"}</Text>
+
+            {editField === "status" ? (
+              <View style={{ flexDirection: "row", gap: 8, marginBottom: 12 }}>
+                {[["Open","#5B60FF"],["In Progress","#D1D5DB"],["Closed","#CFF5D1"]].map(([val,color]) => (
+                  <TouchableOpacity key={String(val)} onPress={() => setEditDraftValue(String(val))} style={{ paddingVertical: 10, paddingHorizontal: 14, borderRadius: 6, backgroundColor: editDraftValue === val ? String(color) : "#F3F4F6", borderWidth: editDraftValue === val ? 0 : 1, borderColor: "#E5E7EB" }}>
+                    <Text style={{ color: editDraftValue === val ? (val === "In Progress" ? "#666" : val === "Closed" ? "#166534" : "white") : "#333", fontWeight: editDraftValue === val ? "700" : "600" }}>{String(val)}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : editField === "priority" ? (
+              <View style={{ flexDirection: "row", gap: 8, marginBottom: 12 }}>
+                {[["Critical","#C21B1B"],["High","#FF6C6C"],["Medium","#E8B931"],["Low","#53A668"]].map(([val,color]) => (
+                  <TouchableOpacity key={String(val)} onPress={() => setEditDraftValue(String(val))} style={{ paddingVertical: 10, paddingHorizontal: 14, borderRadius: 6, backgroundColor: editDraftValue === val ? String(color) : "#F3F4F6", borderWidth: editDraftValue === val ? 0 : 1, borderColor: "#E5E7EB" }}>
+                    <Text style={{ color: editDraftValue === val ? "white" : "#333", fontWeight: editDraftValue === val ? "700" : "600" }}>{String(val)}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : editField === "department" ? (
+              <View style={{ marginBottom: 12 }}>
+                {/* Department dropdown — show two choices for demo */}
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  {['Hardware Support', 'IT Development'].map((name) => {
+                    const selected = editDraftValue === name;
+                    return (
+                      <TouchableOpacity
+                        key={name}
+                        onPress={() => setEditDraftValue(name)}
+                        style={{
+                          paddingVertical: 10,
+                          paddingHorizontal: 14,
+                          borderRadius: 6,
+                          backgroundColor: selected ? '#5B60FF' : '#F3F4F6',
+                          borderWidth: selected ? 0 : 1,
+                          borderColor: '#E5E7EB',
+                        }}
+                      >
+                        <Text style={{ color: selected ? 'white' : '#333', fontWeight: selected ? '700' : '600' }}>{name}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            ) : editField === "assigned" ? (
+              <View style={{ marginBottom: 12 }}>
+                {/* Assigned dropdown — show two choices for demo */}
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  {['Sam Singh', 'Roland Fischer'].map((name) => {
+                    const selected = editDraftValue === name;
+                    return (
+                      <TouchableOpacity
+                        key={name}
+                        onPress={() => setEditDraftValue(name)}
+                        style={{
+                          paddingVertical: 10,
+                          paddingHorizontal: 14,
+                          borderRadius: 6,
+                          backgroundColor: selected ? '#5B60FF' : '#F3F4F6',
+                          borderWidth: selected ? 0 : 1,
+                          borderColor: '#E5E7EB',
+                        }}
+                      >
+                        <Text style={{ color: selected ? 'white' : '#333', fontWeight: selected ? '700' : '600' }}>{name}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            ) : (
+              <View style={{ marginBottom: 12 }}>
+                <TextInput value={editDraftValue} onChangeText={setEditDraftValue} placeholder="Value" style={{ borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 6, paddingHorizontal: 10, paddingVertical: 8 }} />
+              </View>
+            )}
+
+            <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 12, marginTop: 6 }}>
+              <TouchableOpacity onPress={cancelEdit} style={{ paddingHorizontal: 14, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: "#E5E7EB" }}>
+                <Text>Abbrechen</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={saveEdit} style={{ paddingHorizontal: 14, paddingVertical: 8, borderRadius: 6, backgroundColor: "#2F80ED" }}>
+                <Text style={{ color: "white", fontWeight: "600" }}>Speichern</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Compose modal - opens when clicking the "Type your response here" inputs */}
       <Modal
         visible={showComposeModal}
@@ -1392,13 +1620,13 @@ export default function Index() {
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: 24 }}>
           <View style={{ backgroundColor: "white", borderRadius: 8, padding: 18, maxHeight: "90%" }}>
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 16 }}>
                 {/* Ticket number on the left */}
                 <Text style={{ fontWeight: "700", fontSize: 16 }}>{`Ticket# ${currentTicket?.id ?? demoTicket["Case Number"]}`}</Text>
                 <View style={{ width: 12 }} />
                 {/* Prio */}
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                  <View style={{ width: 40, height: 16 }}>
+                  <View style={{ width: 80, height: 16 }}>
                     <Svg width="100%" height="100%">
                       <Defs>
                         <SvgLinearGradient id="prio-modal-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -1406,12 +1634,18 @@ export default function Index() {
                           <Stop offset="100%" stopColor="#451268" />
                         </SvgLinearGradient>
                       </Defs>
-                      <SvgText fill="url(#prio-modal-gradient)" fontSize="12" fontWeight="bold" x="0" y="12">Prio:</SvgText>
+                      <SvgText fill="url(#prio-modal-gradient)" fontSize="12" fontWeight="bold" x="100%" textAnchor="end" y="12">Prio:</SvgText>
                     </Svg>
                   </View>
 
                   {(() => {
-                    const headerPrioRaw = (currentTicket?.priority as string) ?? demoTicketPriority ?? predictedPriority ?? "";
+                    // Prefer demo target when composing from demo input. Otherwise prefer analysisTicket (if present), then current ticket.
+                    // Prefer the model prediction if available (predictedPriority), otherwise fall back
+                    // - if composing to demo: prefer predictedPriority then demoTicketPriority
+                    // - otherwise prefer predictedPriority then analyzed/current ticket then demo fallback
+                    const headerPrioRaw = predictedPriority || (composeTarget === "demo"
+                      ? (demoTicketPriority || "")
+                      : ((analysisTicket?.priority as string) ?? (currentTicket?.priority as string) ?? demoTicketPriority ?? ""));
                     const headerPrioLabel = normalizePriorityLabel(String(headerPrioRaw || "")).trim();
                     // match the start-screen badge color for High (line ~66) which uses #FF6C6C
                     const headerPrioColor = headerPrioLabel
@@ -1422,8 +1656,13 @@ export default function Index() {
                     const showPrio = Boolean(headerPrioLabel);
 
                     return (
-                      <View style={{ paddingHorizontal: 10, paddingVertical: 4, borderRadius: 16, backgroundColor: showPrio ? headerPrioColor : "#E5E7EB" }}>
-                        <Text style={{ color: showPrio ? "white" : "#666", fontWeight: "700", fontSize: 12 }}>{showPrio ? headerPrioLabel : "--"}</Text>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                        <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, backgroundColor: showPrio ? headerPrioColor : "#E5E7EB" }}>
+                          <Text style={{ color: showPrio ? "white" : "#666", fontWeight: "700", fontSize: 12 }}>{showPrio ? headerPrioLabel : "--"}</Text>
+                        </View>
+                        <TouchableOpacity onPress={() => openEdit("priority")} style={{ padding: 6 }}>
+                          <MaterialCommunityIcons name="pencil-outline" size={12} color="#666" />
+                        </TouchableOpacity>
                       </View>
                     );
                   })()}
@@ -1431,7 +1670,7 @@ export default function Index() {
                 </View>
 
                 {/* Abteilung */}
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
                   <View style={{ width: 80, height: 16,marginLeft:50 }}>
                     <Svg width="100%" height="100%">
                       <Defs>
@@ -1440,11 +1679,16 @@ export default function Index() {
                           <Stop offset="100%" stopColor="#451268" />
                         </SvgLinearGradient>
                       </Defs>
-                      <SvgText fill="url(#abteilung-modal-gradient)" fontSize="12" fontWeight="bold" x="0" y="12">Abteilung:</SvgText>
+                      <SvgText fill="url(#abteilung-modal-gradient)" fontSize="12" fontWeight="bold" x="100%" textAnchor="end" y="12">Abteilung:</SvgText>
                     </Svg>
                   </View>
 
-                  <Text style={{ fontSize: 12, color: "#666" }}>{currentTicket?.department ?? (demoTicket as any)?.department ?? (demoTicket as any)?.product ?? "Unbekannt"}</Text>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 4 }}>
+                    <Text style={{ fontSize: 12, color: "#666" }}>{analysisTicket?.department ?? currentTicket?.department ?? (demoTicket as any)?.department ?? (demoTicket as any)?.product ?? "Unbekannt"}</Text>
+                    <TouchableOpacity onPress={() => openEdit("department")} style={{ padding: 6 }}>
+                      <MaterialCommunityIcons name="pencil-outline" size={12} color="#666" />
+                    </TouchableOpacity>
+                  </View>
                 </View>
 
                 {/* small spacer is already above */}
