@@ -31,7 +31,8 @@ const demoTickets: Ticket[] = [
 ];
 
 export const TicketList: React.FC = () => (
-  <View style={{ marginTop: 150 }}>
+  // reduce top spacing so TicketList sits closer to the sections above it
+  <View style={{ marginTop: 60 }}>
     <Text style={{ fontSize: 15, fontWeight: "600", marginBottom: 16 }}>
       Last Ticket(s)
     </Text>

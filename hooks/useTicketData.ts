@@ -95,5 +95,11 @@ export const useTicketData = () => {
     return tickets.find((ticket) => String(ticket.id).trim().toLowerCase() === searchId);
   };
 
-  return { tickets, loading, getTicketById, error };
+  const updateTicket = (id: string, updates: Partial<Pick<Ticket, "status" | "priority">>) => {
+    setTickets((prev) =>
+      prev.map((t) => (String(t.id).trim().toLowerCase() === String(id).trim().toLowerCase() ? { ...t, ...updates } : t))
+    );
+  };
+
+  return { tickets, loading, getTicketById, error, updateTicket };
 };

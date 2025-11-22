@@ -13,6 +13,7 @@ import {
   type StyleProp,
   type ViewStyle,
 } from "react-native";
+
 import Svg, {
   Defs,
   Path,
@@ -50,10 +51,11 @@ export default function Index() {
       return "";
     }
 
-    if (trimmed === "critical") return "Critical";
-    if (trimmed === "high") return "High";
-    if (trimmed === "medium") return "Medium";
-    if (trimmed === "low") return "Low";
+    // be generous: match common variants like "High Priority", "critical - urgent", etc.
+    if (trimmed.includes("critical")) return "Critical";
+    if (trimmed.includes("high")) return "High";
+    if (trimmed.includes("medium")) return "Medium";
+    if (trimmed.includes("low")) return "Low";
 
     return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
   };
@@ -92,9 +94,25 @@ export default function Index() {
   const [showFullscreenResponse, setShowFullscreenResponse] = useState(false);
   const [messages, setMessages] = useState<FlowiseHistoryMessage[]>([]);
   const [hasStartedSpark, setHasStartedSpark] = useState(false);
+  const [showComposeModal, setShowComposeModal] = useState(false);
+  const [composeTo, setComposeTo] = useState("Support@SBB.ch");
+  const [composeCc, setComposeCc] = useState("");
+  const [composeSubject, setComposeSubject] = useState("");
+  const [composeBody, setComposeBody] = useState("");
+  // composeStatus now supports Open (default), In Progress, Closed
+  const [composeStatus, setComposeStatus] = useState<"Open" | "In Progress" | "Closed">("Open");
+  const [showStatusDropdown, setShowStatusDropdown] = useState(false);
   const conversationHistoryRef = useRef<FlowiseHistoryMessage[]>([]);
   const scrollViewRef = useRef<ScrollView>(null);
-  const { tickets, loading: ticketsLoading, getTicketById, error } = useTicketData();
+  const { tickets, loading: ticketsLoading, getTicketById, error, updateTicket } = useTicketData();
+
+  // local state for demo ticket card (so compose sends can update the demo display)
+  const [demoTicketStatus, setDemoTicketStatus] = useState<string>(demoTicket.Status);
+  const [demoTicketPriority, setDemoTicketPriority] = useState<string>(normalizePriorityLabel(demoTicket.Priority));
+  // tracks where the compose modal was opened for — 'demo' or a ticket id
+  const [composeTarget, setComposeTarget] = useState<string | "demo" | null>(null);
+  // controls whether the mid-page compose/LLM area is visible
+  const [showMiddleSection, setShowMiddleSection] = useState<boolean>(true);
 
   useEffect(() => {
     if (searchTicketId) {
@@ -341,6 +359,130 @@ export default function Index() {
     }
   };
 
+  const openComposeModal = (initialSubject?: string, target?: string | "demo") => {
+    if (initialSubject) setComposeSubject(initialSubject);
+    setComposeBody("");
+    setShowComposeModal(true);
+    setComposeTarget(typeof target === "string" ? target : null);
+  };
+
+  const ignoreFocusRef = useRef(false);
+
+  const closeComposeModal = () => {
+    // Hide modal and reset compose form fields so next open starts fresh
+    // Also set a short flag so underlying inputs don't re-open the modal immediately
+    setShowComposeModal(false);
+    setComposeTo("Support@SBB.ch");
+    setComposeCc("");
+    setComposeSubject("");
+    setComposeBody("");
+    // Reset to default Open so the next compose shows Open (with color)
+    setComposeStatus("Open");
+
+    ignoreFocusRef.current = true;
+    setTimeout(() => (ignoreFocusRef.current = false), 300);
+    setComposeTarget(null);
+  };
+
+  const sendCompose = async () => {
+    // capture current body before clearing form
+    const bodyToSend = composeBody?.trim() ?? "";
+    if (!bodyToSend) {
+      // no body, just close
+      closeComposeModal();
+      return;
+    }
+
+    // IMPORTANT: messages created from the Compose modal must NOT be forwarded to Spark AI
+    // (per product request) — we insert the message locally into the conversation only.
+    const userMsg: FlowiseHistoryMessage = { role: "userMessage", content: bodyToSend };
+    conversationHistoryRef.current = [...conversationHistoryRef.current, userMsg];
+    setMessages([...conversationHistoryRef.current]);
+
+    // Mark the associated ticket as Closed and update priority on the start screen
+    try {
+      // Compute new priority for the ticket.
+      // Preference order:
+      // 1) predictedPriority from earlier LLM/endpoint
+      // 2) simple local heuristic based on the compose body text
+      // 3) currentTicket priority (if available)
+      // 4) demo fallback
+      const heuristicFromText = (text: string) => {
+        const t = String(text || "").toLowerCase();
+        if (!t) return "";
+        if (t.includes("krit") || t.includes("urgent") || t.includes("sehr dringend") || t.includes("sofort")) return "Critical";
+        if (t.includes("hoch") || t.includes("wichtig") || t.includes("dringend")) return "High";
+        if (t.includes("mittel") || t.includes("normal")) return "Medium";
+        if (t.includes("niedrig") || t.includes("low")) return "Low";
+        return "";
+      };
+
+      let newPriorityRaw = predictedPriority || heuristicFromText(bodyToSend) || currentTicket?.priority || demoTicketPriority || "Medium";
+      const normalizedPriority = normalizePriorityLabel(String(newPriorityRaw));
+
+      // Decide which target to update: explicit composeTarget if provided, otherwise prefer currentTicket
+      if (composeTarget === "demo") {
+        setDemoTicketStatus("Closed");
+        setDemoTicketPriority(normalizedPriority);
+      } else if (typeof composeTarget === "string" && composeTarget) {
+        // a specific ticket id was provided as composeTarget
+        if (typeof updateTicket === "function") {
+          (updateTicket as any)?.(composeTarget, { status: "Closed", priority: normalizedPriority });
+        }
+        // also fallback to currentTicket if it matches
+        else if (currentTicket && String(currentTicket.id) === String(composeTarget) && typeof updateTicket === "function") {
+          (updateTicket as any)?.(currentTicket.id, { status: "Closed", priority: normalizedPriority });
+        }
+      } else if (currentTicket && typeof updateTicket === "function") {
+        // no explicit composeTarget, update the current ticket if present
+        (updateTicket as any)?.(currentTicket.id, { status: "Closed", priority: normalizedPriority });
+      } else {
+        // fallback demo path
+        setDemoTicketStatus("Closed");
+        setDemoTicketPriority(normalizedPriority);
+      }
+      // Always update demo card so the start page reflects the change regardless of where compose was opened
+      setDemoTicketStatus("Closed");
+      setDemoTicketPriority(normalizedPriority);
+    } catch (e) {
+      console.warn("Failed to update ticket after compose send:", e);
+    }
+
+    closeComposeModal();
+
+    // hide the mid-page compose/LLM area (between the demo input and Last Tickets)
+    setShowMiddleSection(false);
+
+    // show feedback modal immediately (we still gather feedback)
+    setShowFeedbackModal(true);
+  };
+
+  // feedback modal state
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [feedbackRating, setFeedbackRating] = useState<number | null>(null);
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
+
+  const closeFeedback = () => {
+    setShowFeedbackModal(false);
+    setFeedbackRating(null);
+    setFeedbackSubmitted(false);
+  };
+
+  const submitFeedback = () => {
+    // For now we only show a thank-you state; real submission can be added later
+    setFeedbackSubmitted(true);
+    // auto-close after a moment
+    setTimeout(() => closeFeedback(), 900);
+  };
+
+  const insertLastSparkResponse = () => {
+    // prefer the last apiMessage from the conversation history (excluding loading markers)
+    const reversed = [...conversationHistoryRef.current].slice().reverse();
+    const found = reversed.find((m) => m.role === "apiMessage" && m.content && m.content !== "__LOADING__");
+    const text = found?.content ?? llmResponse ?? "";
+    setComposeBody(text);
+  };
+
   const inputWrapperStyle: StyleProp<ViewStyle> = description
     ? { marginTop: 20, marginBottom: 20, alignItems: "flex-start" }
     : { flex: 1, justifyContent: "center", alignItems: "center", marginBottom: 20 };
@@ -434,11 +576,16 @@ export default function Index() {
                 paddingHorizontal: 18,
                 paddingVertical: 8,
                 borderRadius: 20,
-                backgroundColor: "#5B60FF",
+                backgroundColor:
+                  demoTicketStatus === "Closed"
+                    ? "#B7E2B7"
+                    : demoTicketStatus === "In Progress"
+                    ? "#D1D5DB"
+                    : "#5B60FF",
               }}
             >
-              <Text style={{ color: "white", fontWeight: "600", fontSize: 12 }}>
-                {demoTicket.Status}
+              <Text style={{ color: demoTicketStatus === "Closed" ? "#185C1E" : demoTicketStatus === "In Progress" ? "#666" : "white", fontWeight: "600", fontSize: 12 }}>
+                {demoTicketStatus}
               </Text>
             </View>
 
@@ -447,11 +594,11 @@ export default function Index() {
                 paddingHorizontal: 18,
                 paddingVertical: 8,
                 borderRadius: 20,
-                backgroundColor: "#FF6C6C",
+                backgroundColor: demoTicketPriority?.toLowerCase().includes("high") ? "#FF6C6C" : getPriorityColor(demoTicketPriority),
               }}
             >
               <Text style={{ color: "white", fontWeight: "600", fontSize: 12 }}>
-                {demoTicket.Priority}
+                {demoTicketPriority}
               </Text>
             </View>
 
@@ -509,6 +656,7 @@ export default function Index() {
           </View>
         </View>
         
+        {showMiddleSection && (<> 
         <View
           style={{
             flexDirection: "row",
@@ -536,6 +684,7 @@ export default function Index() {
               value={demoNotes}
               onChangeText={setDemoNotes}
               placeholder="Type your response here..."
+              onFocus={() => { if (ignoreFocusRef.current) { ignoreFocusRef.current = false; return; } openComposeModal(`RE: ${demoTicket.Subject}`, "demo"); }}
               placeholderTextColor="#9CA3AF"
               multiline
               style={{
@@ -600,7 +749,8 @@ export default function Index() {
             </LinearGradient>
           </TouchableOpacity>
         </View>
-        {hasStartedSpark && <View style={{ flexDirection: "row", gap: 8, marginBottom: 12, marginTop: 24 }}>
+        {hasStartedSpark && (
+        <View style={{ flexDirection: "row", gap: 8, marginBottom: 12, marginTop: 24 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 25 }}>
               <View style={{ width: 40, height: 15 }}>
                 <Svg width="100%" height="100%">
@@ -621,6 +771,7 @@ export default function Index() {
                   </SvgText>
                 </Svg>
               </View>
+
               <View
                 style={{
                   flexDirection: "row",
@@ -632,7 +783,7 @@ export default function Index() {
                   backgroundColor: showRightBadges ? priorityBadgeColor : "#E5E7EB",
                 }}
               >
-                <Text style={{ fontSize: 12, fontWeight: "bold", color: priorityFromEndpoint ? "white" : "#666" }}>
+                <Text style={{ fontSize: 12, fontWeight: "bold", color: showRightBadges ? (priorityFromEndpoint ? "white" : "#666") : "#333" }}>
                   {showRightBadges ? priorityTextUpper || "--" : "--"}
                 </Text>
                 {showRightBadges && showPriorityConfidence ? (
@@ -679,9 +830,10 @@ export default function Index() {
                 </Text>
               </View>
             </View>
-          </View>}
+          </View>)}
         
-        {hasStartedSpark && <View
+        {hasStartedSpark && (
+        <View
           style={{
             flexDirection: "row",
             alignItems: "stretch",
@@ -744,8 +896,9 @@ export default function Index() {
               />
             </View>
           </LinearGradient>
-        </View>}
-        {hasStartedSpark && <View
+        </View>)}
+        {hasStartedSpark && (
+        <View
           style={{
             flexDirection: "row",
             alignItems: "stretch",
@@ -801,6 +954,14 @@ export default function Index() {
               <TextInput
                 value={emptyTicketNotes}
                 onChangeText={setEmptyTicketNotes}
+                onFocus={() => {
+                  // Do not open compose modal when clicking this follow-up input.
+                  if (ignoreFocusRef.current) {
+                    ignoreFocusRef.current = false;
+                    return;
+                  }
+                  // keep focus but intentionally don't trigger compose modal
+                }}
                 placeholder=""
                 multiline
                 style={{
@@ -850,7 +1011,8 @@ export default function Index() {
               )}
             </LinearGradient>
           </TouchableOpacity>
-        </View>}
+        </View>)}
+        </>)}
         
           {/* TicketList ganz unten anzeigen */}
           <TicketList />
@@ -1060,7 +1222,7 @@ export default function Index() {
                     backgroundColor: showRightBadges ? priorityBadgeColor : "#E5E7EB",
                   }}
                 >
-                  <Text style={{ fontSize: 12, fontWeight: "bold", color: priorityFromEndpoint ? "white" : "#666" }}>
+                  <Text style={{ fontSize: 12, fontWeight: "bold", color: showRightBadges ? (priorityFromEndpoint ? "white" : "#666") : "#333" }}>
                     {showRightBadges ? priorityTextUpper || "--" : "--"}
                   </Text>
                   {showRightBadges && showPriorityConfidence ? (
@@ -1216,6 +1378,276 @@ export default function Index() {
                 </TouchableOpacity>
               </View>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Compose modal - opens when clicking the "Type your response here" inputs */}
+      <Modal
+        visible={showComposeModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={closeComposeModal}
+      >
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: 24 }}>
+          <View style={{ backgroundColor: "white", borderRadius: 8, padding: 18, maxHeight: "90%" }}>
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                {/* Ticket number on the left */}
+                <Text style={{ fontWeight: "700", fontSize: 16 }}>{`Ticket# ${currentTicket?.id ?? demoTicket["Case Number"]}`}</Text>
+                <View style={{ width: 12 }} />
+                {/* Prio */}
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <View style={{ width: 40, height: 16 }}>
+                    <Svg width="100%" height="100%">
+                      <Defs>
+                        <SvgLinearGradient id="prio-modal-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                          <Stop offset="0%" stopColor="#B93F4B" />
+                          <Stop offset="100%" stopColor="#451268" />
+                        </SvgLinearGradient>
+                      </Defs>
+                      <SvgText fill="url(#prio-modal-gradient)" fontSize="12" fontWeight="bold" x="0" y="12">Prio:</SvgText>
+                    </Svg>
+                  </View>
+
+                  {(() => {
+                    const headerPrioRaw = (currentTicket?.priority as string) ?? demoTicketPriority ?? predictedPriority ?? "";
+                    const headerPrioLabel = normalizePriorityLabel(String(headerPrioRaw || "")).trim();
+                    // match the start-screen badge color for High (line ~66) which uses #FF6C6C
+                    const headerPrioColor = headerPrioLabel
+                      ? headerPrioLabel.toLowerCase().includes("high")
+                        ? "#FF6C6C"
+                        : getPriorityColor(headerPrioLabel)
+                      : "#E5E7EB";
+                    const showPrio = Boolean(headerPrioLabel);
+
+                    return (
+                      <View style={{ paddingHorizontal: 10, paddingVertical: 4, borderRadius: 16, backgroundColor: showPrio ? headerPrioColor : "#E5E7EB" }}>
+                        <Text style={{ color: showPrio ? "white" : "#666", fontWeight: "700", fontSize: 12 }}>{showPrio ? headerPrioLabel : "--"}</Text>
+                      </View>
+                    );
+                  })()}
+
+                </View>
+
+                {/* Abteilung */}
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <View style={{ width: 80, height: 16,marginLeft:50 }}>
+                    <Svg width="100%" height="100%">
+                      <Defs>
+                        <SvgLinearGradient id="abteilung-modal-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                          <Stop offset="0%" stopColor="#B93F4B" />
+                          <Stop offset="100%" stopColor="#451268" />
+                        </SvgLinearGradient>
+                      </Defs>
+                      <SvgText fill="url(#abteilung-modal-gradient)" fontSize="12" fontWeight="bold" x="0" y="12">Abteilung:</SvgText>
+                    </Svg>
+                  </View>
+
+                  <Text style={{ fontSize: 12, color: "#666" }}>{currentTicket?.department ?? (demoTicket as any)?.department ?? (demoTicket as any)?.product ?? "Unbekannt"}</Text>
+                </View>
+
+                {/* small spacer is already above */}
+              </View>
+
+              <Text style={{ fontSize: 12, color: "#888" }}>{currentTicket?.creation ?? demoTicket.created}</Text>
+            </View>
+
+            <View style={{ marginBottom: 8 }}>
+              <Text style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>An:</Text>
+              <TextInput value={composeTo} onChangeText={setComposeTo} style={{ borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 6, paddingHorizontal: 10, paddingVertical: 8 }} />
+            </View>
+
+            <View style={{ marginBottom: 8 }}>
+              <Text style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>CC:</Text>
+              <TextInput value={composeCc} onChangeText={setComposeCc} style={{ borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 6, paddingHorizontal: 10, paddingVertical: 8 }} />
+            </View>
+
+            <View style={{ marginBottom: 10, flexDirection: "row", gap: 8, alignItems: "center" }}>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Betreff:</Text>
+                <TextInput value={composeSubject} onChangeText={setComposeSubject} style={{ borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 6, paddingHorizontal: 10, paddingVertical: 8 }} />
+              </View>
+              <TouchableOpacity onPress={() => { insertLastSparkResponse(); }} style={{ marginLeft: 8 }}>
+                <Image source={require("../assets/images/spark-logo.png")} style={{ width: 72, height: 36, marginTop: 20, resizeMode: "contain" }} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ marginBottom: 10 }}>
+              <Text style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Beschreibung</Text>
+
+              {/* Put formatting toolbar inside the description field container */}
+              <View style={{ borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 6, backgroundColor: "white" }}>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 10,
+                    paddingVertical: 6,
+                    paddingHorizontal: 8,
+                    borderBottomWidth: 1,
+                    borderBottomColor: "#F3F4F6",
+                    backgroundColor: "#FAFBFC",
+                    borderTopLeftRadius: 6,
+                    borderTopRightRadius: 6,
+                  }}
+                >
+                  <MaterialCommunityIcons name="format-bold" size={18} color="#444" />
+                  <MaterialCommunityIcons name="format-italic" size={18} color="#444" />
+                  <MaterialCommunityIcons name="format-underline" size={18} color="#444" />
+                  <MaterialCommunityIcons name="format-font" size={18} color="#444" />
+                  <MaterialCommunityIcons name="format-size" size={18} color="#444" />
+                  <MaterialCommunityIcons name="format-list-bulleted" size={18} color="#444" />
+                  <MaterialCommunityIcons name="format-list-numbered" size={18} color="#444" />
+                  <MaterialCommunityIcons name="format-indent-increase" size={18} color="#444" />
+                  <MaterialCommunityIcons name="format-indent-decrease" size={18} color="#444" />
+                  <MaterialCommunityIcons name="link-variant" size={18} color="#444" />
+                  <MaterialCommunityIcons name="emoticon-outline" size={18} color="#444" />
+                  <View style={{ flex: 1 }} />
+                  <MaterialCommunityIcons name="undo" size={16} color="#888" />
+                  <MaterialCommunityIcons name="redo" size={16} color="#888" />
+                </View>
+
+                <TextInput
+                  value={composeBody}
+                  onChangeText={setComposeBody}
+                  multiline
+                  style={{ minHeight: 180, padding: 12 }}
+                />
+              </View>
+            </View>
+
+            <View style={{ marginBottom: 10 }}>
+              <Text style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Anhänge:</Text>
+              <View style={{ borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 6, padding: 10 }}>
+                <Text style={{ color: "#888" }}>
+                  Dateien <Text style={{ color: "#2F80ED" }}>durchsuchen</Text> oder hierher ziehen
+                </Text>
+              </View>
+            </View>
+
+            <View style={{ marginBottom: 12 }}>
+              <Text style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Anfragestatus aktualisieren zu:</Text>
+              <View style={{ flexDirection: "row", gap: 8, alignItems: "center", position: "relative" }}>
+                {/* Status pill (default Open) - click to open options */}
+                <TouchableOpacity
+                  onPress={() => setShowStatusDropdown((s) => !s)}
+                  style={{
+                    minWidth: 120,
+                    paddingVertical: 8,
+                    paddingHorizontal: 12,
+                    // keep Open purple, In Progress should match TicketList gray, Closed stays green
+                    backgroundColor: composeStatus === "Open" ? "#5B60FF" : composeStatus === "In Progress" ? "#D1D5DB" : "#CFF5D1",
+                    borderRadius: 6,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderWidth: composeStatus === "In Progress" || composeStatus === "Closed" ? (composeStatus === "In Progress" || composeStatus === "Closed" ? 1 : 0) : 0,
+                    borderColor: composeStatus === "In Progress" ? "#4F46E5" : composeStatus === "Closed" ? "#16A34A" : "transparent",
+                    shadowColor: composeStatus === "In Progress" ? "#4F46E5" : composeStatus === "Closed" ? "#16A34A" : "transparent",
+                    elevation: composeStatus === "In Progress" || composeStatus === "Closed" ? 2 : 0,
+                  }}
+                >
+                  <Text style={{ color: composeStatus === "Open" ? "white" : composeStatus === "Closed" ? "#166534" : "#666", textAlign: "center", fontWeight: composeStatus === "Open" ? "700" : "600" }}>{composeStatus}</Text>
+                </TouchableOpacity>
+
+                {/* Dropdown - choose In Progress or Closed */}
+                {showStatusDropdown ? (
+                  <View style={{ position: "absolute", top: 48, left: 0, backgroundColor: "white", borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 6, padding: 6, width: 160, zIndex: 40 }}> 
+                    <TouchableOpacity
+                      onPress={() => { setComposeStatus("In Progress"); setShowStatusDropdown(false); }}
+                      style={{ paddingVertical: 10, paddingHorizontal: 8, borderRadius: 6, backgroundColor: composeStatus === "In Progress" ? "#D1D5DB" : "transparent", marginBottom: 6 }}
+                    >
+                      <Text style={{ color: composeStatus === "In Progress" ? "#666" : "#333", fontWeight: composeStatus === "In Progress" ? "700" : "600" }}>In Progress</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      onPress={() => { setComposeStatus("Closed"); setShowStatusDropdown(false); }}
+                      style={{ paddingVertical: 10, paddingHorizontal: 8, borderRadius: 6, backgroundColor: composeStatus === "Closed" ? "#CFF5D1" : "transparent" }}
+                    >
+                      <Text style={{ color: composeStatus === "Closed" ? "#166534" : "#333", fontWeight: composeStatus === "Closed" ? "700" : "600" }}>Closed</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+              </View>
+            </View>
+
+            <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 12 }}>
+              <TouchableOpacity onPress={() => { closeComposeModal(); }} style={{ paddingHorizontal: 14, paddingVertical: 10, borderRadius: 6, borderWidth: 1, borderColor: "#E5E7EB" }}>
+                <Text>Abbrechen</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={sendCompose} style={{ backgroundColor: "#2F80ED", paddingHorizontal: 16, paddingVertical: 10, borderRadius: 6 }}>
+                <Text style={{ color: "white", fontWeight: "600" }}>Senden</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Feedback modal that appears after sending a compose message */}
+      <Modal
+        visible={showFeedbackModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={closeFeedback}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: 'white', borderRadius: 8, padding: 26, alignItems: 'center', width: '92%', maxWidth: 920, alignSelf: 'center', minHeight: 520 }}>
+            <Image source={require('../assets/images/spark-logo.png')} style={{ width: 150, height: 46, resizeMode: 'contain', marginBottom: 20 }} />
+
+            <Text style={{ textAlign: 'center', color: '#333', fontSize: 17, marginBottom: 12 }}>
+              Damit der SPARK künftig noch bessere Antworten liefern kann, nimm dir bitte ein paar
+              Sekunden Zeit und gib kurz Feedback:
+            </Text>
+
+            <Text style={{ fontWeight: '700', color: '#9E2F5B', fontSize: 18, marginTop: 12, marginBottom: 50 }}>
+              Wie hilfreich war die Antwort von SPARK?
+            </Text>
+
+            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 18 }}>
+              {Array.from({ length: 10 }).map((_, idx) => {
+                const val = idx + 1;
+                const isSelected = feedbackRating === val;
+                return (
+                  <TouchableOpacity
+                    key={val}
+                    onPress={() => setFeedbackRating(val)}
+                    style={{
+                      width: 40,
+                      height: 40,
+                      borderRadius: 20,
+                      borderWidth: 1,
+                      borderColor: isSelected ? '#9E2F5B' : '#E6E6E6',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: isSelected ? '#FFF1F6' : 'transparent',
+                    }}
+                  >
+                    <Text style={{ color: isSelected ? '#9E2F5B' : '#9E2F5B', fontWeight: isSelected ? '700' : '500', fontSize: 13 }}>{val}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <View style={{ flexDirection: 'row', justifyContent: 'center', width: '60%', alignSelf: 'center', paddingHorizontal: 12, marginBottom: 16, marginTop: 50 }}>
+              <Text style={{ color: '#9E2F5B', fontSize: 13, marginRight: 10 }}>1 = Sehr schlecht</Text>
+              <Text style={{ color: '#7C2F6B', fontSize: 13 }}>10 = Sehr hilfreich</Text>
+            </View>
+
+            {!feedbackSubmitted ? (
+              feedbackRating ? (
+                <TouchableOpacity onPress={() => submitFeedback()} style={{ paddingHorizontal: 36, paddingVertical: 12, borderRadius: 6, backgroundColor: '#9E2F5B' }}>
+                  <Text style={{ fontSize: 16, color: 'white' }}>Senden</Text>
+                </TouchableOpacity>
+                ) : (
+                <TouchableOpacity onPress={() => closeFeedback()} style={{ paddingHorizontal: 42, paddingVertical: 14, borderRadius: 6, borderWidth: 1, marginTop: 30, borderColor: '#E5E5E5' }}>
+                  <Text style={{ fontSize: 16 }}>Überspringen</Text>
+                </TouchableOpacity>
+              )
+            ) : (
+              <View style={{ paddingVertical: 22 }}>
+                <Text style={{ fontSize: 16, fontWeight: '600' }}>Danke für dein Feedback</Text>
+              </View>
+            )}
           </View>
         </View>
       </Modal>
