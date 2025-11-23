@@ -691,13 +691,23 @@ export default function Index() {
       let newPriorityRaw = predictedPriority || heuristicFromText(bodyToSend) || currentTicket?.priority || demoTicketPriority || "Medium";
       const normalizedPriority = normalizePriorityLabel(String(newPriorityRaw));
 
+      // For demo compose we want to respect exactly what the compose header
+      // displayed (demoTicketPriority) rather than using predictions or the
+      // heuristic. Compute a demo-specific normalized priority to use if
+      // composeTarget === 'demo'.
+      const normalizedPriorityForDemo = normalizePriorityLabel(String(demoTicketPriority || normalizedPriority));
+
       // Decide which target to update: explicit composeTarget if provided, otherwise prefer currentTicket
       if (composeTarget === "demo") {
         // Update demo card both status, priority and adopt the department currently shown in the compose header
         setDemoTicketStatus("Closed");
-        setDemoTicketPriority(normalizedPriority);
-        // choose the department displayed in the compose header (prefer analysisTicket, then currentTicket, then demo fallback)
-        const deptToApply = analysisTicket?.department ?? currentTicket?.department ?? demoTicketDepartment ?? (demoTicket as any)?.department ?? "General support";
+        // apply the priority visible in the compose header (demo ticket's priority)
+        setDemoTicketPriority(normalizedPriorityForDemo);
+        // choose the department displayed in the compose header — for demo compose
+        // always use what the compose header shows (demoTicketDepartment). This
+        // prevents Spark's analysis (which may set analysisTicket.department to
+        // 'Hardware Support') from overwriting what the user sees and expects.
+        const deptToApply = demoTicketDepartment ?? (demoTicket as any)?.department ?? "General support";
         setDemoTicketDepartment(String(deptToApply));
         // stop blinking once demo is updated via compose send
         setPriorityShouldBlink(false);
@@ -725,7 +735,7 @@ export default function Index() {
       }
       // Always update demo card so the start page reflects the change regardless of where compose was opened
       setDemoTicketStatus("Closed");
-      setDemoTicketPriority(normalizedPriority);
+      setDemoTicketPriority(composeTarget === "demo" ? normalizedPriorityForDemo : normalizedPriority);
     } catch (e) {
       console.warn("Failed to update ticket after compose send:", e);
     }
@@ -1250,36 +1260,49 @@ export default function Index() {
               // recommendation itself so it doesn't appear instantly.
               setAnalysisTicket((prev: any) => ({ ...(prev ?? {}), id: demoTicket["Case Number"] }));
 
-              setDemoDepartmentLoading(true);
-              try {
-                await ensureMinDuration(Promise.resolve(forcedDept), 2000);
-
-                setDemoComputedDepartment(forcedDept);
-                // also update the live analysis ticket's department AFTER the delay
-                setAnalysisTicket((prev: any) => ({ ...(prev ?? {}), department: forcedDept }));
-
-                if (
-                  forcedDept &&
-                  String(forcedDept).trim().toLowerCase() !== String(demoTicketDepartmentRef.current).trim().toLowerCase()
-                ) {
-                  setDepartmentShouldBlink(true);
-                  setDepartmentBlinkFast(true);
-                } else {
-                  setDepartmentShouldBlink(false);
-                  setDepartmentBlinkFast(false);
+              // Start the external calls immediately so the backend work begins
+              // right away — the UI will still intentionally delay showing the
+              // recommendation label by 2s so it doesn't appear too fast.
+              (async () => {
+                try {
+                  // fire-and-forget the priority call — non-blocking
+                  sendTicketToPriority("20200521-5022024").catch((err) =>
+                    console.warn("sendTicketToPriority failed", err)
+                  );
+                } catch (err) {
+                  console.warn("sendTicketToPriority scheduling failed", err);
                 }
-              } finally {
-                setDemoDepartmentLoading(false);
-              }
-              try {
-                await sendTicketToPriority("20200521-5022024");
-              } catch (err) {
-                // non-fatal: still run the general analysis flow
-                console.warn("sendTicketToPriority failed", err);
-              }
+              })();
 
+              // Call Spark AI analysis immediately (keep focus=false so UI doesn't change)
               handleSendToLLM("Ticket#20200521-5022024", { focus: false });
               setHasStartedSpark(true);
+
+              // Keep the UX delay for showing the computed department — we intentionally
+              // don't toggle the global demoDepartmentLoading here so the SparkAI
+              // logo remains visible while the backend work runs.
+              (async () => {
+                try {
+                  await ensureMinDuration(Promise.resolve(forcedDept), 2000);
+
+                  setDemoComputedDepartment(forcedDept);
+                  // reveal the recommendation in the analysisTicket after the delay
+                  setAnalysisTicket((prev: any) => ({ ...(prev ?? {}), department: forcedDept }));
+
+                  if (
+                    forcedDept &&
+                    String(forcedDept).trim().toLowerCase() !== String(demoTicketDepartmentRef.current).trim().toLowerCase()
+                  ) {
+                    setDepartmentShouldBlink(true);
+                    setDepartmentBlinkFast(true);
+                  } else {
+                    setDepartmentShouldBlink(false);
+                    setDepartmentBlinkFast(false);
+                  }
+                } finally {
+                  setDemoDepartmentLoading(false);
+                }
+              })();
             }}
             disabled={loading}
             style={{
@@ -1322,92 +1345,7 @@ export default function Index() {
             </LinearGradient>
           </TouchableOpacity>
         </View>
-        {hasStartedSpark && (
-        <View style={{ flexDirection: "row", gap: 8, marginBottom: 20, marginTop: 32 }}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 32 }}>
-              <View style={{ width: 40, height: 15 }}>
-                <Svg width="100%" height="100%">
-                  <Defs>
-                    <SvgLinearGradient id="prio2-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                      <Stop offset="0%" stopColor="#B93F4B" />
-                      <Stop offset="100%" stopColor="#451268" />
-                    </SvgLinearGradient>
-                  </Defs>
-                  <SvgText
-                    fill="url(#prio2-gradient)"
-                    fontSize="12"
-                    fontWeight="bold"
-                    x="0"
-                    y="11"
-                  >
-                    Prio:
-                  </SvgText>
-                </Svg>
-              </View>
-
-              <View
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 6,
-                  paddingHorizontal: 12,
-                  paddingVertical: 10,
-                  borderRadius: 20,
-                  backgroundColor: showRightBadges ? priorityBadgeColor : "#E5E7EB",
-                }}
-              >
-                <Text style={{ fontSize: 12, fontWeight: "bold", color: showRightBadges ? (priorityFromEndpoint ? "white" : "#666") : "#333" }}>
-                  {showRightBadges ? priorityTextUpper || "--" : "--"}
-                </Text>
-                {/* priority edit removed for inline badges */}
-                {showRightBadges && showPriorityConfidence ? (
-                  <Text style={{ fontSize: 10, color: "white" }}>
-                    ({Math.round((priorityConfidence ?? 0) * 100)}%)
-                  </Text>
-                ) : null}
-              </View>
-            </View>
-
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 32, marginLeft: 44 }}>
-              <View style={{ width: 75, height: 15 }}>
-                <Svg width="100%" height="100%">
-                  <Defs>
-                    <SvgLinearGradient id="abteilung2-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                      <Stop offset="0%" stopColor="#B93F4B" />
-                      <Stop offset="100%" stopColor="#451268" />
-                    </SvgLinearGradient>
-                  </Defs>
-                  <SvgText
-                    fill="url(#abteilung2-gradient)"
-                    fontSize="12"
-                    fontWeight="bold"
-                    x="0"
-                    y="11"
-                  >
-                    Abteilung:
-                  </SvgText>
-                </Svg>
-              </View>
-              <View
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 6,
-                  paddingHorizontal: 12,
-                  paddingVertical: 10,
-                  borderRadius: 20,
-                  backgroundColor: showRightBadges ? "#F3F4F6" : "#E5E7EB",
-                }}
-              >
-                <Text style={{ fontSize: 12, color: "#333" }}>
-                  {showRightBadges
-                    ? (analysisTicket?.department ?? currentTicket?.department ?? demoTicketDepartment ?? "Unbekannt")
-                    : "--"}
-                </Text>
-                {/* inline department edit icon removed per UX request (keeps fullscreen/modal editor intact) */}
-              </View>
-            </View>
-          </View>)}
+        {/* Priority & Department inline badges removed per request (no longer needed). */}
         
         {hasStartedSpark && (
         <View
@@ -1432,7 +1370,7 @@ export default function Index() {
                 backgroundColor: "white",
                 borderRadius: 13,
                 padding: 20,
-                minHeight: 230,
+                minHeight: 300,
                 position: "relative",
               }}
             >
@@ -1767,91 +1705,7 @@ export default function Index() {
               )}
             </ScrollView>
             
-            <View style={{ flexDirection: "row", gap: 8, marginBottom: 20, marginTop: 32, paddingHorizontal: 10,marginLeft: -50 }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 32 }}>
-                <View style={{ width: 80, height: 15 }}>
-                  <Svg width="100%" height="100%">
-                    <Defs>
-                      <SvgLinearGradient id="prio-fullscreen-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                        <Stop offset="0%" stopColor="#B93F4B" />
-                        <Stop offset="100%" stopColor="#451268" />
-                      </SvgLinearGradient>
-                    </Defs>
-                    <SvgText
-                      fill="url(#prio-fullscreen-gradient)"
-                      fontSize="12"
-                      fontWeight="bold"
-                      x="100%"
-                      textAnchor="end"
-                      y="11"
-                    >
-                      Prio:
-                    </SvgText>
-                  </Svg>
-                </View>
-
-                <View
-                  style={{
-                    flexDirection: "row",
-                    alignItems: "center",
-                    gap: 6,
-                    paddingHorizontal: 12,
-                    paddingVertical: 10,
-                    borderRadius: 20,
-                    backgroundColor: showRightBadges ? priorityBadgeColor : "#E5E7EB",
-                  }}
-                >
-                  <Text style={{ fontSize: 12, fontWeight: "bold", color: showRightBadges ? (priorityFromEndpoint ? "white" : "#666") : "#333" }}>
-                    {showRightBadges ? priorityTextUpper || "--" : "--"}
-                  </Text>
-                  {showRightBadges && showPriorityConfidence ? (
-                    <Text style={{ fontSize: 10, color: "white" }}>
-                      ({Math.round((priorityConfidence ?? 0) * 100)}%)
-                    </Text>
-                  ) : null}
-                </View>
-              </View>
-
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 32, marginLeft: 0 }}>
-                <View style={{ width: 80, height: 15 }}>
-                  <Svg width="100%" height="100%">
-                    <Defs>
-                      <SvgLinearGradient id="abteilung-fullscreen-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                        <Stop offset="0%" stopColor="#B93F4B" />
-                        <Stop offset="100%" stopColor="#451268" />
-                      </SvgLinearGradient>
-                    </Defs>
-                    <SvgText
-                      fill="url(#abteilung-fullscreen-gradient)"
-                      fontSize="12"
-                      fontWeight="bold"
-                      x="100%"
-                      textAnchor="end"
-                      y="11"
-                    >
-                      Abteilung:
-                    </SvgText>
-                  </Svg>
-                </View>
-                <View
-                  style={{
-                    flexDirection: "row",
-                    alignItems: "center",
-                    gap: 6,
-                    paddingHorizontal: 12,
-                    paddingVertical: 8,
-                    borderRadius: 20,
-                    backgroundColor: showRightBadges ? "#F3F4F6" : "#E5E7EB",
-                  }}
-                >
-                  <Text style={{ fontSize: 12, color: "#333" }}>
-                    {showRightBadges
-                      ? (analysisTicket?.department ?? currentTicket?.department ?? demoTicketDepartment ?? "Unbekannt")
-                      : "--"}
-                  </Text>
-                </View>
-              </View>
-            </View>
+            {/* Fullscreen Prio & Abteilung badges intentionally hidden per request */}
             
             <View style={{ gap: 12, borderTopWidth: 1, borderTopColor: "#F3F4F6", paddingTop: 16 }}>
               <View
@@ -2177,9 +2031,12 @@ export default function Index() {
                     // Prefer the model prediction if available (predictedPriority), otherwise fall back
                     // - if composing to demo: prefer predictedPriority then demoTicketPriority
                     // - otherwise prefer predictedPriority then analyzed/current ticket then demo fallback
-                    const headerPrioRaw = predictedPriority || (composeTarget === "demo"
+                    // For demo-compose we must always display the demo card's
+                    // Priority (never replace it with predictions or analysis);
+                    // otherwise prefer predictedPriority for non-demo flow.
+                    const headerPrioRaw = composeTarget === "demo"
                       ? (demoTicketPriority || "")
-                      : ((analysisTicket?.priority as string) ?? (currentTicket?.priority as string) ?? demoTicketPriority ?? ""));
+                      : (predictedPriority || ((analysisTicket?.priority as string) ?? (currentTicket?.priority as string) ?? demoTicketPriority ?? ""));
                     const headerPrioLabel = normalizePriorityLabel(String(headerPrioRaw || "")).trim();
                     // match the start-screen badge color for High (line ~66) which uses #FF6C6C
                     const headerPrioColor = headerPrioLabel
@@ -2235,10 +2092,10 @@ export default function Index() {
 
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 4 }}>
                     {(function () {
+                      // For demo-compose always show the demo ticket's department —
+                      // do not overwrite it with any computed/analysis result.
                       const deptLabel = composeTarget === "demo"
-                        ? (analysisTicket && llmResponse && !loading
-                            ? (analysisTicket?.department ?? demoTicketDepartment)
-                            : demoTicketDepartment)
+                        ? demoTicketDepartment
                         : analysisTicket?.department ?? currentTicket?.department ?? (demoTicket as any)?.department ?? (demoTicket as any)?.product ?? "Unbekannt";
 
                       // Use a pale background + darker text so department looks like a pill similar to priority
