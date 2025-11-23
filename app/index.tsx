@@ -22,6 +22,7 @@ import Svg, {
   Text as SvgText,
 } from "react-native-svg";
 import Sidebar from "../components/Sidebar";
+import { SparkAILogo } from "../components/SparkAILogo";
 import TicketList from "../components/TicketList";
 import Topbar from "../components/Topbar";
 import { useTicketData } from "../hooks/useTicketData";
@@ -115,6 +116,8 @@ export default function Index() {
   const [demoTicketDepartment, setDemoTicketDepartment] = useState<string>(
     (demoTicket as any)?.department ?? "General support"
   );
+  // ref to keep the latest demoTicketDepartment accessible inside async closures
+  const demoTicketDepartmentRef = useRef<string>((demoTicket as any)?.department ?? "General support");
   // demo assigned (demo JSON includes assigned_to) - default to Michael Fischer
   const [demoTicketAssigned, setDemoTicketAssigned] = useState<string>(
     (demoTicket as any)?.assigned_to ?? "Michael Fischer"
@@ -129,6 +132,10 @@ export default function Index() {
   const [demoPriorityLoading, setDemoPriorityLoading] = useState(false);
   const [demoPriorityConfidence, setDemoPriorityConfidence] = useState<number | null>(null);
   const [demoDepartmentLoading, setDemoDepartmentLoading] = useState(false);
+
+  useEffect(() => {
+    demoTicketDepartmentRef.current = demoTicketDepartment;
+  }, [demoTicketDepartment]);
 
   // helper that ensures a promise takes at least `minMs` milliseconds
   const ensureMinDuration = async <T,>(fn: Promise<T>, minMs = 2000): Promise<T> => {
@@ -168,9 +175,37 @@ export default function Index() {
       // Immediately set a deterministic recommendation for the demo ticket,
       // and make it blink faster to draw attention (user requested immediate Hardware Support suggestion).
       if (!demoComputedDepartment) {
-        setDemoComputedDepartment("Hardware Support");
-        setDepartmentShouldBlink(true);
-        setDepartmentBlinkFast(true);
+        // Recommend "Hardware Support" deterministically for the demo ticket
+        // — but wait a short moment so the recommendation doesn't appear
+        // instantly (UX requested a small pause so it doesn't feel too fast).
+        const initialDept = "Hardware Support";
+
+        // show loading for the department while we intentionally delay
+        setDemoDepartmentLoading(true);
+        try {
+          // ensure the 'recommendation' appears no faster than 2s
+          await ensureMinDuration(Promise.resolve(initialDept), 2000);
+
+          // guard against unmounted component
+          if (!mounted) return;
+
+          setDemoComputedDepartment(initialDept);
+
+          if (
+            initialDept &&
+            String(initialDept).trim().toLowerCase() !== String(demoTicketDepartmentRef.current).trim().toLowerCase()
+          ) {
+            setDepartmentShouldBlink(true);
+            setDepartmentBlinkFast(true);
+          } else {
+            // if the demo already matches the recommendation, ensure we don't
+            // blink (prevents the label from toggling color later)
+            setDepartmentShouldBlink(false);
+            setDepartmentBlinkFast(false);
+          }
+        } finally {
+          setDemoDepartmentLoading(false);
+        }
       }
       try {
         // priority
@@ -231,7 +266,10 @@ export default function Index() {
           if (mounted) {
             const finalDept = suggestedDept || "Hardware Support";
             setDemoComputedDepartment(finalDept);
-            if (finalDept && finalDept !== demoTicketDepartment) {
+            if (
+              finalDept &&
+              String(finalDept).trim().toLowerCase() !== String(demoTicketDepartmentRef.current).trim().toLowerCase()
+            ) {
               setDepartmentShouldBlink(true);
             }
             setAnalysisTicket((prev: any) => ({ ...(prev ?? {}), id: demoTicket["Case Number"], department: finalDept || prev?.department }));
@@ -266,7 +304,15 @@ export default function Index() {
 
   // Blink toggles for department
   useEffect(() => {
-    if (!departmentShouldBlink) {
+    // Do not start or continue blinking when the current demo department
+    // already equals SparkAI's recommendation -- this prevents accidental
+    // re-enabling from async flows or stale closures.
+    const deptMatches =
+      demoComputedDepartment &&
+      demoTicketDepartmentRef.current &&
+      String(demoComputedDepartment).trim().toLowerCase() === String(demoTicketDepartmentRef.current).trim().toLowerCase();
+
+    if (!departmentShouldBlink || deptMatches) {
       setShowDepartmentGradient(false);
       return;
     }
@@ -274,7 +320,7 @@ export default function Index() {
     const intervalMs = departmentBlinkFast ? 350 : 700;
     const id = setInterval(() => setShowDepartmentGradient((s) => !s), intervalMs);
     return () => clearInterval(id);
-  }, [departmentShouldBlink, departmentBlinkFast]);
+  }, [departmentShouldBlink, departmentBlinkFast, demoComputedDepartment]);
 
   const currentTicket = searchTicketId ? getTicketById(searchTicketId) : undefined;
 
@@ -804,7 +850,10 @@ export default function Index() {
           // Per request: always recommend "Hardware Support" for demo department when asked on demand
           const finalDept = "Hardware Support";
           setDemoComputedDepartment(finalDept);
-          if (finalDept && finalDept !== demoTicketDepartment) {
+          if (
+            finalDept &&
+            String(finalDept).trim().toLowerCase() !== String(demoTicketDepartmentRef.current).trim().toLowerCase()
+          ) {
             setDepartmentShouldBlink(true);
           }
         } catch (err) {
@@ -915,6 +964,38 @@ export default function Index() {
     typeof priorityConfidence === "number" &&
     !Number.isNaN(priorityConfidence);
 
+  // helper booleans — true when the demo's shown value already equals Spark's recommendation
+  const demoPriorityMatchesRecommendation = Boolean(
+    // match if demo computed recommendation equals current demo value
+    (demoComputedPriority && demoTicketPriority && demoComputedPriority.trim().toLowerCase() === demoTicketPriority.trim().toLowerCase())
+    // OR if the endpoint's latest predictedPriority equals the demo value
+    || (predictedPriority && demoTicketPriority && predictedPriority.trim().toLowerCase() === demoTicketPriority.trim().toLowerCase())
+  );
+
+  const demoDepartmentMatchesRecommendation = Boolean(
+    demoComputedDepartment && demoTicketDepartment && demoComputedDepartment.trim().toLowerCase() === demoTicketDepartment.trim().toLowerCase()
+  );
+
+  // Only show the SparkAI logo next to labels once we have a finished
+  // recommendation for that field. This prevents the logo from appearing
+  // while async calculations are still running.
+  const priorityHasRecommendation = Boolean(
+    (demoComputedPriority && !demoPriorityLoading) || (predictedPriority && !priorityLoading)
+  );
+
+  const departmentHasRecommendation = Boolean(demoComputedDepartment && !demoDepartmentLoading);
+
+  // Defensive: ensure blinking is disabled any time the shown demo department
+  // already matches SparkAI's recommendation. This prevents any asynchronous
+  // updates elsewhere from accidentally re-enabling the blink after a match.
+  useEffect(() => {
+    if (demoDepartmentMatchesRecommendation) {
+      setDepartmentShouldBlink(false);
+      setShowDepartmentGradient(false);
+      setDepartmentBlinkFast(false);
+    }
+  }, [demoDepartmentMatchesRecommendation]);
+
   return (
     <View style={{ flex: 1, backgroundColor: "white" }}>
       <View style={{ 
@@ -1001,11 +1082,37 @@ export default function Index() {
 
                 {/* Priority row (now after status) */}
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 30 }}>
-                  {priorityShouldBlink && showPriorityGradient ? (
-                    <Text style={{ width: 80, fontSize: 12, fontWeight: "600", textAlign: "right", color: "#B93F4B" }}>Priority</Text>
-                  ) : (
-                    <Text style={{ width: 80, fontSize: 12, color: "#7D7A92", textAlign: "right" }}>Priority</Text>
-                  )}
+                  <View style={{ width: 80, alignItems: 'flex-end' }}>
+                    {/* hide the logo entirely if the current priority already matches Spark's recommendation */}
+                    {priorityShouldBlink && showPriorityGradient ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
+                        {(function () {
+                          // Only render the logo once we actually have a recommendation
+                          // (either demo-computed or the endpoint result) and when the
+                          // current value doesn't already match it.
+                          if (!priorityHasRecommendation || demoPriorityMatchesRecommendation) return null;
+                          return (
+                            <View style={{ opacity: 1, transform: [{ scale: 0.6 }], marginRight: -10 }}>
+                              <SparkAILogo />
+                            </View>
+                          );
+                        })()}
+                        <Text style={{ fontSize: 12, fontWeight: "600", textAlign: "right", color: "#B93F4B" }}>Priority</Text>
+                      </View>
+                    ) : (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
+                        {(function () {
+                          if (!priorityHasRecommendation || demoPriorityMatchesRecommendation) return null;
+                          return (
+                            <View style={{ opacity: 0.18, transform: [{ scale: 0.6 }], marginRight: -10 }}>
+                              <SparkAILogo />
+                            </View>
+                          );
+                        })()}
+                        <Text style={{ fontSize: 12, color: "#7D7A92", textAlign: "right" }}>Priority</Text>
+                      </View>
+                    )}
+                  </View>
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                       {/* Priority pill - use TicketList pill sizing; pale background with colored text per priority */}
                       {(function renderPriorityPill() {
@@ -1033,11 +1140,33 @@ export default function Index() {
 
                 {/* Department (moved after prio) */}
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 30 }}>
-                  {departmentShouldBlink && showDepartmentGradient ? (
-                    <Text style={{ width: 80, fontSize: 12, fontWeight: "600", textAlign: "right", color: "#B93F4B" }}>Department</Text>
-                  ) : (
-                    <Text style={{ width: 80, fontSize: 12, color: "#7D7A92", textAlign: "right" }}>Department</Text>
-                  )}
+                  <View style={{ width: 80, alignItems: 'flex-end' }}>
+                    {departmentShouldBlink && showDepartmentGradient ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
+                        {(function () {
+                          if (!departmentHasRecommendation || demoDepartmentMatchesRecommendation) return null;
+                          return (
+                            <View style={{ opacity: 1, transform: [{ scale: 0.6 }], marginRight: -12 }}>
+                              <SparkAILogo />
+                            </View>
+                          );
+                        })()}
+                        <Text style={{ fontSize: 12, fontWeight: "600", textAlign: "right", color: "#B93F4B" }}>Department</Text>
+                      </View>
+                    ) : (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
+                        {(function () {
+                          if (!departmentHasRecommendation || demoDepartmentMatchesRecommendation) return null;
+                          return (
+                            <View style={{ opacity: 0.18, transform: [{ scale: 0.6 }], marginRight: -12 }}>
+                              <SparkAILogo />
+                            </View>
+                          );
+                        })()}
+                        <Text style={{ fontSize: 12, color: "#7D7A92", textAlign: "right" }}>Department</Text>
+                      </View>
+                    )}
+                  </View>
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                     <Text style={{ fontSize: 14, fontWeight: "600", color: "#2E2C34" }}>{currentTicket?.department ?? demoTicketDepartment ?? "General support"}</Text>
                     <TouchableOpacity onPress={() => openEdit("department")} style={{ padding: 6 }}>
@@ -1112,6 +1241,36 @@ export default function Index() {
             onPress={async () => {
               // run sparkAI analysis for this ticket but DON'T switch the UI focus (won't change department/current ticket)
               // Also explicitly send the exact ticket payload to the priority endpoint so we know exactly what it receives.
+              // Ensure demo department recommendation is always Hardware Support when the
+              // Spark AI button is clicked (per UX requirement). Update the computed
+              // department and analysisTicket so inline badges reflect this.
+              const forcedDept = "Hardware Support";
+              // keep analysisTicket id updated so inline badges reflect which
+              // ticket we're analyzing, but delay showing the department
+              // recommendation itself so it doesn't appear instantly.
+              setAnalysisTicket((prev: any) => ({ ...(prev ?? {}), id: demoTicket["Case Number"] }));
+
+              setDemoDepartmentLoading(true);
+              try {
+                await ensureMinDuration(Promise.resolve(forcedDept), 2000);
+
+                setDemoComputedDepartment(forcedDept);
+                // also update the live analysis ticket's department AFTER the delay
+                setAnalysisTicket((prev: any) => ({ ...(prev ?? {}), department: forcedDept }));
+
+                if (
+                  forcedDept &&
+                  String(forcedDept).trim().toLowerCase() !== String(demoTicketDepartmentRef.current).trim().toLowerCase()
+                ) {
+                  setDepartmentShouldBlink(true);
+                  setDepartmentBlinkFast(true);
+                } else {
+                  setDepartmentShouldBlink(false);
+                  setDepartmentBlinkFast(false);
+                }
+              } finally {
+                setDemoDepartmentLoading(false);
+              }
               try {
                 await sendTicketToPriority("20200521-5022024");
               } catch (err) {
@@ -1841,8 +2000,13 @@ export default function Index() {
                     <Text style={{ fontSize: 12, color: '#666' }}>Berechnung läuft...</Text>
                   </View>
                 ) : demoComputedPriority ? (
-                  <View style={{ marginTop: 8 }}>
-                    <Text style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Spark's Empfehlung:</Text>
+                  <View style={{ marginTop: 40 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 20 }}>
+                      <View style={{ opacity: 1, transform: [{ scale: 0.6 }], marginLeft: -18, marginRight: -18 }}>
+                        <SparkAILogo />
+                      </View>
+                      <Text style={{ fontSize: 12, color: "#666" }}>empfiehlt:</Text>
+                    </View>
                     <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
                       <View style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, backgroundColor: getPriorityColor(demoComputedPriority) === "#C21B1B" || demoComputedPriority.toLowerCase().includes("high") ? "#FFEAEA" : getPriorityColor(demoComputedPriority) === "#E8B931" ? "#FFF7D6" : getPriorityColor(demoComputedPriority) === "#53A668" ? "#E8F7EE" : "#E5E7EB" }}>
                         <Text style={{ color: getPriorityColor(demoComputedPriority), fontWeight: "700" }}>{demoComputedPriority || "--"}</Text>
@@ -1859,9 +2023,16 @@ export default function Index() {
                           // also clear demo priority confidence highlight
                           setDemoPriorityConfidence(null);
                         }}
-                        style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, backgroundColor: '#2F80ED' }}
+                        activeOpacity={0.9}
                       >
-                        <Text style={{ color: 'white', fontWeight: '600' }}>Empfehlung übernehmen</Text>
+                        <LinearGradient
+                          colors={["#B93F4B", "#451268"]}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 0 }}
+                          style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6 }}
+                        >
+                          <Text style={{ color: 'white', fontWeight: '600' }}>Übernehmen</Text>
+                        </LinearGradient>
                       </TouchableOpacity>
                     </View>
                   </View>
@@ -1900,9 +2071,14 @@ export default function Index() {
                       <Text style={{ fontSize: 12, color: '#666' }}>Berechnung läuft...</Text>
                     </View>
                   ) : demoComputedDepartment ? (
-                    <View style={{ marginTop: 8 }}>
-                      <Text style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Spark's Empfehlung:</Text>
-                      <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                    <View style={{ marginTop: 40}}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        <View style={{ opacity: 1, transform: [{ scale: 0.6 }], marginLeft: -18, marginRight: -18 }}>
+                          <SparkAILogo/>
+                        </View>
+                        <Text style={{ fontSize: 12, color: "#666" }}>empfiehlt:</Text>
+                      </View>
+                      <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center',marginTop: 20 }}>
                         <View style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, backgroundColor: '#F3F4F6' }}>
                           <Text style={{ color: '#2E2C34', fontWeight: '700' }}>{demoComputedDepartment || '--'}</Text>
                         </View>
@@ -1915,9 +2091,16 @@ export default function Index() {
                             // ensure fast blink is cleared when accepting
                             setDepartmentBlinkFast(false);
                           }}
-                          style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, backgroundColor: '#2F80ED' }}
+                          activeOpacity={0.9}
                         >
-                          <Text style={{ color: 'white', fontWeight: '600' }}>Empfehlung übernehmen</Text>
+                          <LinearGradient
+                            colors={["#B93F4B", "#451268"]}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 0 }}
+                            style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6 }}
+                          >
+                            <Text style={{ color: 'white', fontWeight: '600' }}>Übernehmen</Text>
+                          </LinearGradient>
                         </TouchableOpacity>
                       </View>
                     </View>
