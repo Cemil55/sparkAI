@@ -14,7 +14,7 @@ const items: Array<{
   { key: "dashboard", label: "Dashboard", icon: "view-grid-outline" },
   { key: "users", label: "Users", icon: "account-group-outline" },
   { key: "tickets", label: "Tickets", icon: "ticket-confirmation-outline" },
-  { key: "officials", label: "Officials", icon: "badge-account-outline" },
+  { key: "officials", label: "Upgrade Path", icon: "badge-account-outline" },
   { key: "settings", label: "Site Settings", icon: "cog-outline" },
 ];
 
