@@ -27,6 +27,7 @@ import SparkChatHome from "../components/SparkChatHome";
 import TicketLanding from "../components/TicketLanding";
 import TicketList from "../components/TicketList";
 import Topbar from "../components/Topbar";
+import UpgradePath from "../components/UpgradePath";
 import { useTicketData } from "../hooks/useTicketData";
 import { callSparkAI, type FlowiseHistoryMessage } from "../services/geminiService";
 import { predictPriority } from "../services/priorityService";
@@ -1218,6 +1219,10 @@ export default function Index() {
           {activeSidebarKey !== "sparkChat" && <Topbar userName="Sam Singh" />}
           {activeSidebarKey === "sparkChat" ? (
             <SparkChatHome userName="Sam" />
+          ) : activeSidebarKey === "officials" ? (
+            <View style={{ padding: 32 }}>
+              <UpgradePath onChange={(from, to, addon) => console.log("upgrade-path", { from, to, addon })} />
+            </View>
           ) : showLanding ? (
             <TicketLanding onSelect={handleLandingSelect} />
           ) : (
