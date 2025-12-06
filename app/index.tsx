@@ -23,6 +23,8 @@ import Svg, {
 } from "react-native-svg";
 import Sidebar from "../components/Sidebar";
 import { SparkAILogo } from "../components/SparkAILogo";
+import SparkChatHome from "../components/SparkChatHome";
+import TicketLanding from "../components/TicketLanding";
 import TicketList from "../components/TicketList";
 import Topbar from "../components/Topbar";
 import { useTicketData } from "../hooks/useTicketData";
@@ -40,10 +42,15 @@ type DemoTicket = {
   Priority: string;
 };
 
-const demoTicketData = require("../assets/data/ticket_demo.json") as DemoTicket;
+const demoTicketData = require("../assets/data/ticket_demo.json") as DemoTicket[];
 
 export default function Index() {
-  const demoTicket: DemoTicket = demoTicketData;
+  // Allow the demo data file to be an array — landing will allow picking which demo ticket is used.
+  const [showLanding, setShowLanding] = useState(true);
+  const [selectedDemoTicket, setSelectedDemoTicket] = useState<DemoTicket | null>(null);
+  const [activeSidebarKey, setActiveSidebarKey] = useState<string>("tickets");
+
+  const demoTicket: DemoTicket = (selectedDemoTicket ?? (Array.isArray(demoTicketData) && demoTicketData.length > 0 ? demoTicketData[0] : (demoTicketData as unknown as DemoTicket))) as DemoTicket;
 
   const normalizePriorityLabel = (value: string) => {
     const trimmed = value?.trim().toLowerCase();
@@ -107,6 +114,35 @@ export default function Index() {
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
   const conversationHistoryRef = useRef<FlowiseHistoryMessage[]>([]);
   const scrollViewRef = useRef<ScrollView>(null);
+  // Separate controllers for user-initiated calls vs lightweight/background demo calls.
+  // This prevents background computations (demo-previews, on-demand hints) from
+  // cancelling an active user-initiated Spark AI request.
+  const sparkUserAbortControllerRef = useRef<AbortController | null>(null);
+  const sparkBackgroundAbortControllerRef = useRef<AbortController | null>(null);
+
+  const startSparkUserCall = () => {
+    // abort any previous *user* call
+    try {
+      sparkUserAbortControllerRef.current?.abort();
+    } catch (e) {
+      // ignore
+    }
+    const c = new AbortController();
+    sparkUserAbortControllerRef.current = c;
+    return c.signal;
+  };
+
+  const startSparkBackgroundCall = () => {
+    // abort any previous background call
+    try {
+      sparkBackgroundAbortControllerRef.current?.abort();
+    } catch (e) {
+      // ignore
+    }
+    const c = new AbortController();
+    sparkBackgroundAbortControllerRef.current = c;
+    return c.signal;
+  };
   const { tickets, loading: ticketsLoading, getTicketById, error, updateTicket } = useTicketData();
 
   // local state for demo ticket card (so compose sends can update the demo display)
@@ -150,6 +186,22 @@ export default function Index() {
   const [demoComputedDepartment, setDemoComputedDepartment] = useState<string>("");
   const [departmentBlinkFast, setDepartmentBlinkFast] = useState(false);
 
+  // Handler for opening a demo ticket from the landing page
+  const handleLandingSelect = (t: DemoTicket) => {
+    // start fresh when selecting a demo ticket — clear any previous Spark/LLM state
+    resetSparkState();
+    setSelectedDemoTicket(t);
+    setShowLanding(false);
+
+    setDemoTicketStatus(t.Status ?? "Open");
+    setDemoTicketPriority(normalizePriorityLabel(t.Priority ?? ""));
+    setDemoTicketDepartment((t as any).department ?? "General support");
+    setDemoTicketAssigned(t.assigned_to ?? "Michael Fischer");
+
+    const id = (t["Case Number"] || "").toString().split("#")[1] || String(t["Case Number"] || "");
+    setTicketId(id);
+  };
+
   // blinking/control flags — when computed differs from demo defaults these toggle
   const [priorityShouldBlink, setPriorityShouldBlink] = useState(false);
   const [departmentShouldBlink, setDepartmentShouldBlink] = useState(false);
@@ -167,11 +219,22 @@ export default function Index() {
     }
   }, [searchTicketId, tickets]);
 
-  // On mount: compute demo ticket priority & department automatically
+  // Compute demo ticket priority & department only when a demo ticket is selected
   useEffect(() => {
+    if (!selectedDemoTicket) return; // don't run until a ticket is chosen
     let mounted = true;
 
+    // clear previous computed values so the UI reflects the newly-selected ticket
+    setDemoComputedPriority("");
+    setDemoPriorityConfidence(null);
+    setDemoComputedDepartment("");
+    setPriorityShouldBlink(false);
+    setDepartmentShouldBlink(false);
+    setShowPriorityGradient(false);
+    setShowDepartmentGradient(false);
+
     const computeDemo = async () => {
+      const dt = selectedDemoTicket as DemoTicket;
       // Immediately set a deterministic recommendation for the demo ticket,
       // and make it blink faster to draw attention (user requested immediate Hardware Support suggestion).
       if (!demoComputedDepartment) {
@@ -184,7 +247,7 @@ export default function Index() {
         setDemoDepartmentLoading(true);
         try {
           // ensure the 'recommendation' appears no faster than 2s
-          await ensureMinDuration(Promise.resolve(initialDept), 2000);
+          await ensureMinDuration(Promise.resolve(initialDept), 1000);
 
           // guard against unmounted component
           if (!mounted) return;
@@ -210,29 +273,29 @@ export default function Index() {
       try {
         // priority
         const payload = {
-          "Case Description": demoTicket["Case Description"],
-          Product: demoTicket.Subject || "Unbekannt",
+          "Case Description": dt["Case Description"],
+          Product: dt.Subject || "Unbekannt",
           "Support Type": "Technical Support",
-          Status: demoTicket.Status || "Open",
+          Status: dt.Status || "Open",
           // include other demo fields so the model receives the full ticket context
-          "Case Number": demoTicket["Case Number"],
-          Subject: demoTicket.Subject,
-          created: demoTicket.created,
-          assigned_to: demoTicket.assigned_to,
-          Priority: demoTicket.Priority,
-          department: (demoTicket as any)?.department ?? demoTicketDepartment,
+          "Case Number": dt["Case Number"],
+          Subject: dt.Subject,
+          created: dt.created,
+          assigned_to: dt.assigned_to,
+          Priority: dt.Priority,
+          department: (dt as any)?.department ?? demoTicketDepartment,
         };
 
           const pr = await ensureMinDuration(
             predictPriority({
               ...payload,
               // include demo metadata explicitly for clarity
-              "Case Number": demoTicket["Case Number"],
-              Subject: demoTicket.Subject,
-              created: demoTicket.created,
-              assigned_to: demoTicket.assigned_to,
-              Priority: demoTicket.Priority,
-              department: (demoTicket as any)?.department ?? demoTicketDepartment,
+              "Case Number": dt["Case Number"],
+              Subject: dt.Subject,
+              created: dt.created,
+              assigned_to: dt.assigned_to,
+              Priority: dt.Priority,
+              department: (dt as any)?.department ?? demoTicketDepartment,
             }).catch((e) => {
             console.warn("demo priority error", e);
             return { priority: "", confidence: null } as any;
@@ -249,30 +312,37 @@ export default function Index() {
         }
 
         // department — ask SparkAI for a suggested department for the demo ticket
-        const ticketContext = buildTicketContext(undefined, demoTicket["Case Description"]);
+        const ticketContext = buildTicketContext(undefined, dt["Case Description"]);
         try {
           const session = await getSessionId();
-          const aiResponse = await ensureMinDuration(
-            callSparkAI(buildInitialPrompt(ticketContext), session, []),
-            2000
-          );
+          const aiSignal = startSparkBackgroundCall();
+          try {
+            const aiResponse = await ensureMinDuration(
+              callSparkAI(buildInitialPrompt(ticketContext), session, [], aiSignal),
+              1000
+            );
 
-          let suggestedDept = "";
-          // Per request: always recommend "Hardware Support" for demo department
-          if (aiResponse) {
-            suggestedDept = "Hardware Support";
-          }
-
-          if (mounted) {
-            const finalDept = suggestedDept || "Hardware Support";
-            setDemoComputedDepartment(finalDept);
-            if (
-              finalDept &&
-              String(finalDept).trim().toLowerCase() !== String(demoTicketDepartmentRef.current).trim().toLowerCase()
-            ) {
-              setDepartmentShouldBlink(true);
+            let suggestedDept = "";
+            // Per request: always recommend "Hardware Support" for demo department
+            if (aiResponse) {
+              suggestedDept = "Hardware Support";
             }
-            setAnalysisTicket((prev: any) => ({ ...(prev ?? {}), id: demoTicket["Case Number"], department: finalDept || prev?.department }));
+
+            if (mounted) {
+              const finalDept = suggestedDept || "Hardware Support";
+              setDemoComputedDepartment(finalDept);
+              if (
+                finalDept &&
+                String(finalDept).trim().toLowerCase() !== String(demoTicketDepartmentRef.current).trim().toLowerCase()
+              ) {
+                setDepartmentShouldBlink(true);
+              }
+              setAnalysisTicket((prev: any) => ({ ...(prev ?? {}), id: dt["Case Number"], department: finalDept || prev?.department }));
+            }
+          } catch (err: any) {
+            // If the request was aborted because a new call started, ignore silently
+            if (err?.name === "AbortError") return;
+            console.warn("demo department analysis failed", err);
           }
         } catch (err) {
           console.warn("demo department analysis failed", err);
@@ -287,7 +357,7 @@ export default function Index() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [selectedDemoTicket]);
 
   // Blink toggles for priority — respect departmentBlinkFast so both priority
   // and department blink at the same rate when department is set to fast.
@@ -358,6 +428,34 @@ export default function Index() {
       "Antworte bitte auf Deutsch und konzentriere dich ausschließlich auf die Ticketdaten.",
     ].join("\n\n");
 
+  // Reset Spark/LLM related UI and conversation state so the app returns to
+  // a clean initial state when switching tickets or returning to the Tickets
+  // landing screen.
+  const resetSparkState = () => {
+    // cancel any in-progress Spark requests (both user & background)
+    try {
+      sparkUserAbortControllerRef.current?.abort();
+    } catch (e) {}
+    try {
+      sparkBackgroundAbortControllerRef.current?.abort();
+    } catch (e) {}
+    sparkUserAbortControllerRef.current = null;
+    sparkBackgroundAbortControllerRef.current = null;
+    setLlmResponse("");
+    setUserResponse("");
+    setSendingUserResponse(false);
+    setHasSentInitialPrompt(false);
+    conversationHistoryRef.current = [];
+    setMessages([]);
+    setLoading(false);
+    setShowPriority(false);
+    setPredictedPriority("");
+    setPriorityConfidence(null);
+    setPriorityLoading(false);
+    setAnalysisTicket(null);
+    setHasStartedSpark(false);
+  };
+
   const handleSearchTicket = () => {
     const trimmedId = ticketId.trim();
 
@@ -398,11 +496,22 @@ export default function Index() {
     let activeTicket = currentTicket;
     let activeDescription = description;
 
-    if (specificId) {
+      if (specificId) {
       let t = getTicketById(specificId);
       if (!t) {
         const cleanId = specificId.replace(/^(Ticket)?#?/i, "").trim();
-        t = getTicketById(cleanId);
+          t = getTicketById(cleanId);
+          // If still not found, check whether the requested id matches the demo ticket
+          // Only allow demo fallback when the user explicitly selected a demo ticket
+          const demoCaseNumberRaw = String((selectedDemoTicket as any)?.["Case Number"] || "").replace(/^(Ticket)?#?/i, "").trim();
+          if (!t && selectedDemoTicket && cleanId === demoCaseNumberRaw) {
+            // construct a minimal ticket object for analysis using the selected demo ticket
+            t = {
+              id: demoCaseNumberRaw,
+              description: String((selectedDemoTicket as any)["Case Description"] || ""),
+              subject: String((selectedDemoTicket as any).Subject || ""),
+            } as any;
+          }
       }
       
       if (t) {
@@ -448,27 +557,39 @@ export default function Index() {
 
       let priorityPromise: Promise<void> | undefined;
       if (activeTicket) {
-        // If this is the demo ticket, always build the payload using the demo
-        // ticket values that are shown on the start screen (guarantees identical inputs).
-        const demoCaseNumberRaw = String((demoTicket as any)["Case Number"] || "").replace(/^(Ticket)?#?/i, "").trim();
+        // Build payload from the currently-analyzed ticket. If the analyzed
+        // ticket is the selected demo ticket, use the selected demo payload;
+        // otherwise use the activeTicket (database) fields.
         const specificCleanForDemo = specificId ? String(specificId).replace(/^(Ticket)?#?/i, "").trim() : undefined;
         const activeTicketIdClean = String(activeTicket.id || "").replace(/^(Ticket)?#?/i, "").trim();
-        const useDemoPayload = (specificCleanForDemo && specificCleanForDemo === demoCaseNumberRaw) || activeTicketIdClean === demoCaseNumberRaw;
+        const demoCaseNumberRaw = String((selectedDemoTicket as any)?.["Case Number"] || "").replace(/^(Ticket)?#?/i, "").trim();
+        const isDemoAnalyzed = selectedDemoTicket && ((specificCleanForDemo && specificCleanForDemo === demoCaseNumberRaw) || activeTicketIdClean === demoCaseNumberRaw);
 
-        // Always use the demo ticket payload for predictPriority so the endpoint
-        // consistently receives the demo ticket data shown at app load.
-        const payload = {
-          "Case Description": demoTicket["Case Description"],
-          Product: demoTicket.Subject || "Unbekannt",
-          "Support Type": "Technical Support",
-          Status: demoTicket.Status || "Open",
-          "Case Number": demoTicket["Case Number"],
-          Subject: demoTicket.Subject,
-          created: demoTicket.created,
-          assigned_to: demoTicket.assigned_to,
-          Priority: demoTicket.Priority,
-          department: (demoTicket as any)?.department ?? demoTicketDepartment,
-        };
+        const payload = isDemoAnalyzed && selectedDemoTicket
+          ? {
+              "Case Description": (selectedDemoTicket as any)["Case Description"],
+              Product: (selectedDemoTicket as any).Subject || "Unbekannt",
+              "Support Type": "Technical Support",
+              Status: (selectedDemoTicket as any).Status || "Open",
+              "Case Number": (selectedDemoTicket as any)["Case Number"],
+              Subject: (selectedDemoTicket as any).Subject,
+              created: (selectedDemoTicket as any).created,
+              assigned_to: (selectedDemoTicket as any).assigned_to,
+              Priority: (selectedDemoTicket as any).Priority,
+              department: (selectedDemoTicket as any)?.department ?? demoTicketDepartment,
+            }
+          : {
+              "Case Description": activeTicket.description || "",
+              Product: (activeTicket as any).product || "Unbekannt",
+              "Support Type": "Technical Support",
+              Status: activeTicket.status || "Open",
+              "Case Number": activeTicket.id || "",
+              Subject: activeTicket.subject || "",
+              created: (activeTicket as any).creation || "",
+              assigned_to: (activeTicket as any).assigned_to || "",
+              Priority: (activeTicket as any).priority || "",
+              department: (activeTicket as any).department || "",
+            };
         ;
 
         priorityPromise = predictPriority(payload)
@@ -496,11 +617,18 @@ export default function Index() {
       const messageForSpark = hasSentInitialPrompt
         ? activeDescription.trim()
         : buildInitialPrompt(ticketContext);
-      const response = await callSparkAI(
-        messageForSpark,
-        sessionForCall,
-        [...conversationHistoryRef.current]
-      );
+      const signal = startSparkUserCall();
+      let response: string;
+      try {
+        response = await callSparkAI(messageForSpark, sessionForCall, [...conversationHistoryRef.current], signal);
+      } catch (err: any) {
+        // If the request was aborted because a newer Spark call started, ignore
+        if (err?.name === "AbortError") {
+          console.log("Spark call aborted (handleSendToLLM)");
+          return;
+        }
+        throw err;
+      }
       setLlmResponse(response);
       setUserResponse("");
       setHasSentInitialPrompt(true);
@@ -532,8 +660,20 @@ export default function Index() {
   // Useful for ensuring the endpoint gets the precise ticket data (e.g. ticket 20200521-5022024).
   const sendTicketToPriority = async (ticketId: string) => {
     try {
-      const t = getTicketById(ticketId.replace(/^(Ticket)?#?/i, ""));
-      if (!t) throw new Error(`Ticket ${ticketId} nicht gefunden`);
+      const cleaned = ticketId.replace(/^(Ticket)?#?/i, "");
+      let t = getTicketById(cleaned);
+
+      // If ticket not found in DB, allow calling the priority endpoint for
+      // the demo ticket case number by using the demo payload (we still log a message).
+      if (!t) {
+        const demoCaseNumberRaw = String((selectedDemoTicket as any)?.["Case Number"] || "").replace(/^(Ticket)?#?/i, "").trim();
+        if (!selectedDemoTicket || String(cleaned).trim() !== String(demoCaseNumberRaw).trim()) {
+          throw new Error(`Ticket ${ticketId} nicht gefunden`);
+        } else {
+          // demo ticket is explicitly selected — use that payload
+          console.log("sendTicketToPriority: using selected demo payload for", demoCaseNumberRaw);
+        }
+      }
 
       // The endpoint should be called with the demo ticket info shown at app load
       // to guarantee consistent predictions. Use the demo ticket payload here.
@@ -550,10 +690,24 @@ export default function Index() {
         department: (demoTicket as any)?.department ?? demoTicketDepartment,
       } as const;
 
-      console.log("[Priority] Sending payload:", payload);
+      // If ticket not found in DB but selectedDemoTicket exists, substitute the payload
+      const sendPayload = !t && selectedDemoTicket ? {
+        "Case Description": (selectedDemoTicket as any)["Case Description"],
+        Product: (selectedDemoTicket as any).Subject || "Unbekannt",
+        "Support Type": "Technical Support",
+        Status: (selectedDemoTicket as any).Status || "Open",
+        "Case Number": (selectedDemoTicket as any)["Case Number"],
+        Subject: (selectedDemoTicket as any).Subject,
+        created: (selectedDemoTicket as any).created,
+        assigned_to: (selectedDemoTicket as any).assigned_to,
+        Priority: (selectedDemoTicket as any).Priority,
+        department: (selectedDemoTicket as any)?.department ?? demoTicketDepartment,
+      } : payload;
+
+      console.log("[Priority] Sending payload:", sendPayload);
 
       const start = Date.now();
-      const result = await predictPriority(payload as any).catch((e) => {
+      const result = await predictPriority(sendPayload as any).catch((e) => {
         console.warn("Priority call failed", e);
         throw e;
       });
@@ -564,7 +718,9 @@ export default function Index() {
       const normalized = normalizePriorityLabel(String(result.priority || ""));
       setPredictedPriority(normalized);
       setPriorityConfidence(typeof result.confidence === "number" ? result.confidence : null);
-      setShowPriority(Boolean(t));
+      // If not found in the DB, we still want to show priority information
+      // because we're sending the demo payload.
+      setShowPriority(Boolean(t) || true);
 
       return result;
     } catch (err) {
@@ -599,12 +755,26 @@ export default function Index() {
       setMessages([...conversationHistoryRef.current]);
 
       const sessionForCall = await getSessionId();
+      // Ensure any previous Spark call is cancelled when we start a new user query
+      const signal = startSparkUserCall();
       // Sende nur die User-Nachricht und die History an SparkAI, kein Priority-Endpoint!
-      const response = await callSparkAI(
-        trimmedResponse,
-        sessionForCall,
-        conversationHistoryRef.current.filter(m => m.content !== "__LOADING__")
-      );
+      let response: string;
+      try {
+        response = await callSparkAI(
+          trimmedResponse,
+          sessionForCall,
+          conversationHistoryRef.current.filter((m) => m.content !== "__LOADING__"),
+          signal
+        );
+      } catch (err: any) {
+        if (err?.name === "AbortError") {
+          // Request was cancelled due to a new Spark call; remove the loading marker and return.
+          conversationHistoryRef.current = conversationHistoryRef.current.filter((m) => m.content !== "__LOADING__");
+          setMessages([...conversationHistoryRef.current]);
+          return;
+        }
+        throw err;
+      }
       setLlmResponse(response);
 
       if (isOverride) {
@@ -792,13 +962,13 @@ export default function Index() {
     if (currentTicket) {
       setEditDraftValue(String((currentTicket as any)[field] ?? ""));
     } else if (field === "status") {
-      setEditDraftValue(demoTicketStatus);
+      setEditDraftValue(selectedDemoTicket ? String((selectedDemoTicket as any)["Status"] ?? "") : demoTicketStatus);
     } else if (field === "priority") {
-      setEditDraftValue(demoTicketPriority);
+      setEditDraftValue(selectedDemoTicket ? String((selectedDemoTicket as any)["Priority"] ?? "") : demoTicketPriority);
     } else if (field === "department") {
-      setEditDraftValue(demoTicketDepartment);
+      setEditDraftValue(selectedDemoTicket ? String((selectedDemoTicket as any)["department"] ?? "") : demoTicketDepartment);
     } else if (field === "assigned") {
-      setEditDraftValue(demoTicketAssigned);
+      setEditDraftValue(selectedDemoTicket ? String((selectedDemoTicket as any)["assigned_to"] ?? "") : demoTicketAssigned);
     } else {
       setEditDraftValue("");
     }
@@ -806,27 +976,30 @@ export default function Index() {
 
     // If opening the priority editor for the demo ticket and we don't yet have
     // a computed recommendation, request it on demand so the modal shows useful info.
-    if (field === "priority" && !currentTicket && !demoComputedPriority && !demoPriorityLoading) {
+    // Only allow on-demand demo calculations if a demo ticket was explicitly selected.
+    if (field === "priority" && !currentTicket && selectedDemoTicket && !demoComputedPriority && !demoPriorityLoading) {
       setDemoPriorityLoading(true);
       (async () => {
         try {
+          const dt = selectedDemoTicket as DemoTicket;
+
           const payload = {
-            "Case Description": demoTicket["Case Description"],
-            Product: demoTicket.Subject || "Unbekannt",
+            "Case Description": dt["Case Description"],
+            Product: dt.Subject || "Unbekannt",
             "Support Type": "Technical Support",
-            Status: demoTicket.Status || "Open",
+            Status: dt.Status || "Open",
           };
 
           const pr = await ensureMinDuration(
             predictPriority({
               ...payload,
               // include demo metadata when doing on-demand demo compute
-              "Case Number": demoTicket["Case Number"],
-              Subject: demoTicket.Subject,
-              created: demoTicket.created,
-              assigned_to: demoTicket.assigned_to,
-              Priority: demoTicket.Priority,
-              department: (demoTicket as any)?.department ?? demoTicketDepartment,
+              "Case Number": dt["Case Number"],
+              Subject: dt.Subject,
+              created: dt.created,
+              assigned_to: dt.assigned_to,
+              Priority: dt.Priority,
+              department: (dt as any)?.department ?? demoTicketDepartment,
             }).catch((e) => {
               console.warn("on-demand demo priority error", e);
               return { priority: "", confidence: null } as any;
@@ -849,22 +1022,33 @@ export default function Index() {
     }
     // If opening the department editor for the demo ticket and we don't yet have
     // a computed recommendation, request it on demand so the modal shows useful info.
-    if (field === "department" && !currentTicket && !demoComputedDepartment && !demoDepartmentLoading) {
+    // require the demo to be explicitly selected before asking SparkAI on demand
+    if (field === "department" && !currentTicket && selectedDemoTicket && !demoComputedDepartment && !demoDepartmentLoading) {
       setDemoDepartmentLoading(true);
       (async () => {
         try {
-          const ticketContext = buildTicketContext(undefined, demoTicket["Case Description"]);
+          const dt = selectedDemoTicket as DemoTicket;
+          const ticketContext = buildTicketContext(undefined, dt["Case Description"]);
           const session = await getSessionId();
-          const aiResponse = await ensureMinDuration(callSparkAI(buildInitialPrompt(ticketContext), session, []), 2000);
+          const signal = startSparkBackgroundCall();
+          try {
+            const aiResponse = await ensureMinDuration(callSparkAI(buildInitialPrompt(ticketContext), session, [], signal), 1000);
 
-          // Per request: always recommend "Hardware Support" for demo department when asked on demand
-          const finalDept = "Hardware Support";
-          setDemoComputedDepartment(finalDept);
-          if (
-            finalDept &&
-            String(finalDept).trim().toLowerCase() !== String(demoTicketDepartmentRef.current).trim().toLowerCase()
-          ) {
-            setDepartmentShouldBlink(true);
+            // Per request: always recommend "Hardware Support" for demo department when asked on demand
+            const finalDept = "Hardware Support";
+            setDemoComputedDepartment(finalDept);
+            if (
+              finalDept &&
+              String(finalDept).trim().toLowerCase() !== String(demoTicketDepartmentRef.current).trim().toLowerCase()
+            ) {
+              setDepartmentShouldBlink(true);
+            }
+          } catch (err: any) {
+            if (err?.name === "AbortError") {
+              // aborted by a newer Spark call, ignore
+              return;
+            }
+            console.warn("on-demand demo department failed", err);
           }
         } catch (err) {
           console.warn("on-demand demo department failed", err);
@@ -1013,19 +1197,41 @@ export default function Index() {
         flexDirection: "row", 
         backgroundColor: "white"
       }}>
-        <Sidebar activeKey="tickets" />
-        <View style={{ flex: 1, backgroundColor: "#F9F9FB" }}>
-          <Topbar userName="Sam Singh" />
-          <ScrollView
-            style={{ flex: 1, paddingHorizontal: 32, paddingTop: 12 }}
-            contentContainerStyle={{ paddingBottom: 40 }}
-          >
+        <Sidebar
+          activeKey={activeSidebarKey}
+          onSelect={(key) => {
+            setActiveSidebarKey(key);
+            if (key === "tickets") {
+              // always open the landing ticket list when 'Tickets' is clicked
+              setShowLanding(true);
+              setSelectedDemoTicket(null);
+              // clear any previously-run Spark analysis so Tickets returns to initial screen
+              resetSparkState();
+            }
+            if (key === "sparkChat") {
+              // show the Spark Chat area
+              setShowLanding(false);
+            }
+          }}
+        />
+        <View style={{ flex: 1, backgroundColor: activeSidebarKey === "sparkChat" ? "#F9F9FB" : "#F9F9FB" }}>
+          {activeSidebarKey !== "sparkChat" && <Topbar userName="Sam Singh" />}
+          {activeSidebarKey === "sparkChat" ? (
+            <SparkChatHome userName="Sam" />
+          ) : showLanding ? (
+            <TicketLanding onSelect={handleLandingSelect} />
+          ) : (
+            <ScrollView
+              style={{ flex: 1, paddingHorizontal: 32, paddingTop: 12 }}
+              contentContainerStyle={{ paddingBottom: 40 }}
+            >
         {/* Demo Ticket Card */}
         <View
           style={{
             backgroundColor: "white",
             borderRadius: 24,
             padding: 24,
+            position: 'relative',
             marginTop: 12,
             marginBottom: 24,
             shadowColor: "#000",
@@ -1054,17 +1260,8 @@ export default function Index() {
                 {demoTicket["Case Description"]}
               </Text>
 
-              <View style={{ flexDirection: "row", justifyContent: "flex-start", alignItems: "center", marginTop: 50 }}>
-                <Image
-                  source={require("../assets/images/SBB.png")}
-                  style={{ width: 40, height: 40, borderRadius: 20, marginRight: 18 }}
-                />
-                <View>
-                  <Text style={{ fontSize: 14, fontWeight: "600", color: "#727272" }}>
-                    SBB CFF FFS
-                  </Text>
-                </View>
-              </View>
+              {/* empty space reserved where the logo would have been — logo is positioned fixed at bottom-left */}
+              <View style={{ height: 56 }} />
             </View>
 
             {/* right column: dedicated stacked block for Created / Abteilung / Status / Prio */}
@@ -1197,6 +1394,21 @@ export default function Index() {
                 </View>
               </View>
             </View>
+
+            {/* Fixed bottom-left logo — absolute so it doesn't shift with text */}
+            <View
+              style={{
+                position: "absolute",
+                left: 4,
+                bottom: 3,
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 12,
+              }}
+            >
+              <Image source={require("../assets/images/SBB.png")} style={{ width: 40, height: 40, borderRadius: 20 }} />
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#727272" }}>SBB CFF FFS</Text>
+            </View>
           </View>
         </View>
         
@@ -1258,15 +1470,24 @@ export default function Index() {
               // keep analysisTicket id updated so inline badges reflect which
               // ticket we're analyzing, but delay showing the department
               // recommendation itself so it doesn't appear instantly.
-              setAnalysisTicket((prev: any) => ({ ...(prev ?? {}), id: demoTicket["Case Number"] }));
+              // only allow demo-mode analysis when a demo ticket has been selected
+              if (!selectedDemoTicket) {
+                // nothing to do — there's no selected demo ticket to analyze
+                alert("Bitte wählen Sie zuerst ein Demo-Ticket aus der Liste aus.");
+                return;
+              }
+              setAnalysisTicket((prev: any) => ({ ...(prev ?? {}), id: selectedDemoTicket["Case Number"] }));
 
               // Start the external calls immediately so the backend work begins
               // right away — the UI will still intentionally delay showing the
               // recommendation label by 2s so it doesn't appear too fast.
               (async () => {
                 try {
+                  // determine the demo case number (clean form)
+                  const demoCaseRaw = String((demoTicket as any)["Case Number"] || "").replace(/^(Ticket)?#?/i, "").trim();
+
                   // fire-and-forget the priority call — non-blocking
-                  sendTicketToPriority("20200521-5022024").catch((err) =>
+                  sendTicketToPriority(demoCaseRaw).catch((err) =>
                     console.warn("sendTicketToPriority failed", err)
                   );
                 } catch (err) {
@@ -1275,7 +1496,14 @@ export default function Index() {
               })();
 
               // Call Spark AI analysis immediately (keep focus=false so UI doesn't change)
-              handleSendToLLM("Ticket#20200521-5022024", { focus: false });
+              // tell the LLM to analyze the currently-displayed demo ticket
+                // if a demo is selected, analyze it; otherwise, nothing
+                if (!selectedDemoTicket) {
+                  alert("Bitte wählen Sie zuerst ein Demo-Ticket aus der Liste aus.");
+                } else {
+                  const demoCaseForLLM = String((selectedDemoTicket as any)["Case Number"] || "").trim();
+                  handleSendToLLM(demoCaseForLLM, { focus: false });
+                }
               setHasStartedSpark(true);
 
               // Keep the UX delay for showing the computed department — we intentionally
@@ -1531,7 +1759,8 @@ export default function Index() {
         
           {/* TicketList ganz unten anzeigen */}
           <TicketList />
-          </ScrollView>
+            </ScrollView>
+          )}
         </View>
       </View>
 
@@ -2018,99 +2247,7 @@ export default function Index() {
                 {/* Ticket number on the left */}
                 <Text style={{ fontWeight: "700", fontSize: 16 }}>{currentTicket?.id ?? demoTicket["Case Number"]}</Text>
                 <View style={{ width: 12 }} />
-                {/* Prio */}
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                  <View style={{ width: 80, height: 16 }}>
-                    <Svg width="100%" height="100%">
-                      <SvgText fill="#6f6f6fff" fontSize="13" x="100%" textAnchor="end" y="12">Priority:</SvgText>
-                    </Svg>
-                  </View>
-
-                  {(() => {
-                    // Prefer demo target when composing from demo input. Otherwise prefer analysisTicket (if present), then current ticket.
-                    // Prefer the model prediction if available (predictedPriority), otherwise fall back
-                    // - if composing to demo: prefer predictedPriority then demoTicketPriority
-                    // - otherwise prefer predictedPriority then analyzed/current ticket then demo fallback
-                    // For demo-compose we must always display the demo card's
-                    // Priority (never replace it with predictions or analysis);
-                    // otherwise prefer predictedPriority for non-demo flow.
-                    const headerPrioRaw = composeTarget === "demo"
-                      ? (demoTicketPriority || "")
-                      : (predictedPriority || ((analysisTicket?.priority as string) ?? (currentTicket?.priority as string) ?? demoTicketPriority ?? ""));
-                    const headerPrioLabel = normalizePriorityLabel(String(headerPrioRaw || "")).trim();
-                    // match the start-screen badge color for High (line ~66) which uses #FF6C6C
-                    const headerPrioColor = headerPrioLabel
-                      ? headerPrioLabel.toLowerCase().includes("high")
-                        ? "#FF6C6C"
-                        : getPriorityColor(headerPrioLabel)
-                      : "#E5E7EB";
-                    const showPrio = Boolean(headerPrioLabel);
-
-                    // Render the priority pill to match the demo card style: pale background with colored text
-                    return (
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                        {(function () {
-                          const p = String(headerPrioLabel || "").toLowerCase();
-                          const textColor = getPriorityColor(headerPrioLabel);
-                          const bg = p.includes("critical") || p.includes("high")
-                            ? "#FFEAEA"
-                            : p.includes("medium")
-                            ? "#FFF7D6"
-                            : p.includes("low")
-                            ? "#E8F7EE"
-                            : "#E5E7EB";
-
-                          const show = Boolean(headerPrioLabel);
-
-                          return (
-                            <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, backgroundColor: show ? bg : "#E5E7EB" }}>
-                              <Text style={{ color: show ? textColor : "#666", fontWeight: "700", fontSize: 12 }}>{show ? headerPrioLabel : "--"}</Text>
-                            </View>
-                          );
-                        })()}
-
-                        {headerPrioRaw === predictedPriority && typeof priorityConfidence === 'number' ? (
-                          <Text style={{ fontSize: 11, color: '#666', marginLeft: 6 }}>({Math.round((priorityConfidence ?? 0) * 100)}%)</Text>
-                        ) : null}
-
-                        <TouchableOpacity onPress={() => openEdit("priority")} style={{ padding: 6 }}>
-                          <MaterialCommunityIcons name="pencil-outline" size={12} color="#666" />
-                        </TouchableOpacity>
-                      </View>
-                    );
-                  })()}
-
-                </View>
-
-                {/* Abteilung */}
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-                  <View style={{ width: 80, height: 16,marginLeft:20 }}>
-                    <Svg width="100%" height="100%">
-                      <SvgText fill="#6f6f6fff" fontSize="13" x="100%" textAnchor="end" y="12">Department:</SvgText>
-                    </Svg>
-                  </View>
-
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 4 }}>
-                    {(function () {
-                      // For demo-compose always show the demo ticket's department —
-                      // do not overwrite it with any computed/analysis result.
-                      const deptLabel = composeTarget === "demo"
-                        ? demoTicketDepartment
-                        : analysisTicket?.department ?? currentTicket?.department ?? (demoTicket as any)?.department ?? (demoTicket as any)?.product ?? "Unbekannt";
-
-                      // Use a pale background + darker text so department looks like a pill similar to priority
-                      return (
-                        <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, backgroundColor: showRightBadges ? "#F3F4F6" : "#E5E7EB" }}>
-                          <Text style={{ fontSize: 12, color: "#2E2C34", fontWeight: "600" }}>{deptLabel}</Text>
-                        </View>
-                      );
-                    })()}
-                    
-                    <TouchableOpacity onPress={() => openEdit("department")} style={{ padding: 6 }}>
-                      <MaterialCommunityIcons name="pencil-outline" size={12} color="#666" />
-                    </TouchableOpacity>
-                  </View>
-                </View>
+                {/* Priority and Department removed from compose modal per user request */}
 
                 {/* small spacer is already above */}
               </View>

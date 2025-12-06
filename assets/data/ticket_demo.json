@@ -1,9 +1,47 @@
-{
-    "Case Number": "Ticket#20200521-5022024",
-    "Subject": "FFOX515 Sync information cannot be retrieved from node via NMS Sync-Map",
-    "Case Description": "In the Bahrain NMS the upload of the SDH Synchronization information from the Sync map fails for 3 nodes. For all other nodes it is working as expected. As a result the Sync map is not properly shown because the links are missing due to these 3 stations and it is displayed as multiple islands. However one can see that the origin of some islands are deriving their clocking signal from these nodes. If connected to the node with UCST the sync information can be uploaded as expected and is also selected as expected (no loop). During some reconfigurations recentyl done on IP and OSPF areas of these nodes the COBUX have been restarted but the problem is still existing in these nodes. Also they have been removed from the NMS and added to a new Elementr Agent but without success.",
+[
+   {
+       "Case Number": "Ticket#20251006-6515276",
+    "Subject": "DIRAC Server Installation",
+    "Case Description": "I'm trying to install the DIRAC server. I see that I need a 'Quantis USB device' for generating random numbers. Is this device absolutely required, or can the system work without it? If I don't have one available right now, can I still complete the installation and get the DIRAC server running?",
     "created": "10:15:30 | 21.07.2025",
-    "assigned_to": "Kai Meier",
+    "assigned_to": "Unassigned",
     "Status": "Open",
-    "Priority": "High Priority"
-  }
+    "Priority": "Medium Priority",
+        "company": "SBB CFF FFS",
+      "logo": "SBB"
+   },
+   {
+     "Case Number": "Ticket#20251203-6525895",
+    "Subject": "FOXMAN-UN R17A E Tree",
+    "Case Description": "How to create E-Tree on FOXMAN-UN R17A",
+    "created": "11:15:30 | 23.07.2025",
+    "assigned_to": "Unassigned",
+    "Status": "Open",
+    "Priority": "High Priority",
+        "company": "SBB CFF FFS",
+      "logo": "SBB"
+   },
+   {
+     "Case Number": "Ticket#20250908-6501020",
+    "Subject": "NUSA-2 unit not available(slot-6) / no application software alarm",
+    "Case Description": "Site 17B NUSA2 unit slot 6 is reporting 'No Application Software' alarm and customer has reported Ethernet traffic using 'EOS' for both unit 4 & 6 is down.",
+    "created": "15:17:30 | 12.07.2025",
+    "assigned_to": "Unassigned",
+    "Status": "Open",
+    "Priority": "Medium Priority",
+        "company": "SBB CFF FFS",
+      "logo": "SBB"
+
+   },
+   {
+      "Case Number": "20250714-6476282",
+      "Subject": "NE OSPF Remote Management Failure",
+      "Case Description": "Customer reported a specific FOX615 NE (as named as EMG) within their network has lost management communication. All services carried by it are working normally, though. The remote management is done by DCN in-band communication via MCC interfaces over the main MPLS-TP ring and via ECC PDH for standalone SDH connections, both using the internal OSPF router, as described in the attached topology document. Between SDH FOX615 devices and EMG hybrid FOX615 device are radio third party links, so they are not connected directly. EMG is the uplink of the remote management of standalone SDH FOX615 towards the main ring and then to the control center. After accessing the equipment through local console interface, it was possible to notice the lo-1 interface is operationally down (unknown reason so far), so OSPF is not working properly. We have tried to restart OSPF and switchover the CESM3 redundant control units, both unsucceeded.",
+      "created": "15:17:30 | 12.07.2025",
+      "assigned_to": "Unassigned",
+      "Status": "Open",
+      "Priority": "Low Priority",
+      "company": "SBB CFF FFS",
+      "logo": "SBB"
+   }
+]

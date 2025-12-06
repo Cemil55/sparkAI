@@ -12,7 +12,8 @@ if (!SPARK_AI_ENDPOINT) {
 export const callSparkAI = async (
   ticketDescription: string,
   sessionId?: string,
-  history?: FlowiseHistoryMessage[]
+  history?: FlowiseHistoryMessage[],
+  signal?: AbortSignal
 ): Promise<string> => {
   if (!SPARK_AI_ENDPOINT) {
     throw new Error("Spark AI Endpoint fehlt. Bitte Environment Variable setzen.");
@@ -48,6 +49,8 @@ export const callSparkAI = async (
       headers: {
         "Content-Type": "application/json",
       },
+      // pass through an optional AbortSignal so callers can cancel in-flight requests
+      signal,
       body: JSON.stringify(payload),
     });
 

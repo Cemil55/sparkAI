@@ -15,7 +15,7 @@ const items: Array<{
   { key: "users", label: "Users", icon: "account-group-outline" },
   { key: "tickets", label: "Tickets", icon: "ticket-confirmation-outline" },
   { key: "officials", label: "Upgrade Path", icon: "badge-account-outline" },
-  { key: "settings", label: "Site Settings", icon: "cog-outline" },
+  { key: "sparkChat", label: "Spark Chat", icon: "chat-outline" },
 ];
 
 export type SidebarProps = {
@@ -45,8 +45,52 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeKey = "tickets", onSelec
       <View style={{ marginTop: 40 }}>
         {items.map((item) => {
           const isActive = item.key === activeKey;
+          const isDisabled = item.key === 'dashboard' || item.key === 'users';
           const baseTextColor = "#2E2C34";
           const iconColor = isActive ? "#B93F4B" : "#7A7A8D";
+
+          if (isDisabled) {
+            // Render a visually normal but non-interactive item for disabled menu entries
+            // Use TouchableOpacity with a no-op handler and activeOpacity=1 so the item
+            // looks identical and does not provide press feedback or navigation.
+            return (
+              <TouchableOpacity key={item.key} style={{ paddingHorizontal: 20, marginBottom: 6 }} activeOpacity={1} onPress={() => {}}>
+                {isActive ? (
+                  <LinearGradient
+                    colors={["#F9EFFD", "#FDEDF6"]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={{
+                      borderRadius: 16,
+                      paddingVertical: 14,
+                      paddingHorizontal: 18,
+                      flexDirection: "row",
+                      alignItems: "center",
+                    }}
+                  >
+                    {/* keep the same left spacing as non-active items: small spacer + icon */}
+                    <View style={{ width: 4, height: 32, marginRight: 14 }} />
+                    <MaterialCommunityIcons name={item.icon} size={20} color={iconColor} style={{ marginRight: 14 }} />
+                    <Text style={{ fontSize: 16, fontWeight: "600", color: baseTextColor }}>{item.label}</Text>
+                  </LinearGradient>
+                ) : (
+                    <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      paddingVertical: 14,
+                      paddingHorizontal: 18,
+                      borderRadius: 12,
+                    }}
+                  >
+                    <View style={{ width: 4, height: 32, marginRight: 14 }} />
+                    <MaterialCommunityIcons name={item.icon} size={20} color={iconColor} style={{ marginRight: 14 }} />
+                    <Text style={{ fontSize: 16, fontWeight: "500", color: baseTextColor }}>{item.label}</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            );
+          }
 
           return (
             <TouchableOpacity
@@ -68,16 +112,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeKey = "tickets", onSelec
                       alignItems: "center",
                     }}
                   >
-                    <MaterialCommunityIcons
-                      name={item.icon}
-                      size={20}
-                      color={iconColor}
-                      style={{ marginLeft: 18 }}
-                    />
+                    {/* keep the same left spacing as non-active items: small spacer + icon */}
+                    <View style={{ width: 4, height: 32, marginRight: 14 }} />
+                    <MaterialCommunityIcons name={item.icon} size={20} color={iconColor} style={{ marginRight: 14 }} />
                     {item.label === "Tickets" ? (
                       <MaskedView
                         maskElement={
-                          <Text style={{ fontSize: 16, fontWeight: "600", marginLeft: 14, color: "#B93F4B" }}>
+                          <Text style={{ fontSize: 16, fontWeight: "600", color: "#B93F4B" }}>
                             {item.label}
                           </Text>
                         }
