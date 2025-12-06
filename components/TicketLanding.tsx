@@ -70,8 +70,8 @@ export const TicketLanding: React.FC<{ onSelect: (t: RawDemo) => void }> = ({ on
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                   <Text style={{ fontWeight: "700", fontSize: 16 }}>Ticket# {id}</Text>
                   <View style={{ marginLeft: 8, flexDirection: "row", gap: 8 }}>
-                    <View style={{ backgroundColor: status.toLowerCase().includes("open") ? "#EAE7FF" : "#D1D5DB", paddingHorizontal: 8, paddingVertical: 5, borderRadius: 8 }}>
-                      <Text style={{ color: status.toLowerCase().includes("open") ? "#6B21A8" : "#666", fontWeight: "600" }}>{status}</Text>
+                    <View style={{ backgroundColor: status.toLowerCase().includes("open") ? "#DBEAFE" : "#D1D5DB", paddingHorizontal: 8, paddingVertical: 5, borderRadius: 8 }}>
+                      <Text style={{ color: status.toLowerCase().includes("open") ? "#1E40AF" : "#666", fontWeight: "600" }}>{status}</Text>
                     </View>
                     <View style={{ backgroundColor: priority.toLowerCase().includes("high") ? "#FEE2E2" : priority.toLowerCase().includes("medium") ? "#FEF3C7" : "#D1FAE5", paddingHorizontal: 8, paddingVertical: 5, borderRadius: 8 }}>
                       <Text style={{ color: priority.toLowerCase().includes("high") ? "#991B1B" : priority.toLowerCase().includes("medium") ? "#92400E" : "#065F46", fontWeight: "600" }}>{priority}</Text>

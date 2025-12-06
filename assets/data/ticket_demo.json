@@ -6,7 +6,7 @@
     "created": "10:15:30 | 21.07.2025",
     "assigned_to": "Unassigned",
     "Status": "Open",
-    "Priority": "Medium Priority",
+    "Priority": "Medium",
         "company": "SBB CFF FFS",
       "logo": "SBB"
    },
@@ -17,7 +17,7 @@
     "created": "11:15:30 | 23.07.2025",
     "assigned_to": "Unassigned",
     "Status": "Open",
-    "Priority": "High Priority",
+    "Priority": "High",
         "company": "SBB CFF FFS",
       "logo": "SBB"
    },
@@ -28,7 +28,7 @@
     "created": "15:17:30 | 12.07.2025",
     "assigned_to": "Unassigned",
     "Status": "Open",
-    "Priority": "Medium Priority",
+    "Priority": "Medium",
         "company": "SBB CFF FFS",
       "logo": "SBB"
 
@@ -40,7 +40,7 @@
       "created": "15:17:30 | 12.07.2025",
       "assigned_to": "Unassigned",
       "Status": "Open",
-      "Priority": "Low Priority",
+      "Priority": "Low",
       "company": "SBB CFF FFS",
       "logo": "SBB"
    }
