@@ -77,6 +77,11 @@ const UpgradePath: React.FC<Props> = ({ fromOptions, toOptions, addonsOptions, o
   const [result, setResult] = React.useState<any | null>(null);
   const [contentHeight, setContentHeight] = React.useState<number | undefined>(undefined);
   const [showRaw, setShowRaw] = React.useState(false);
+  const UPGRADE_PATH_ENDPOINT = process.env.EXPO_PUBLIC_UPGRADE_PATH_ENDPOINT ?? "";
+
+  if (!UPGRADE_PATH_ENDPOINT) {
+    console.warn("⚠️ EXPO_PUBLIC_UPGRADE_PATH_ENDPOINT is not set. Please add it to your .env file.");
+  }
 
   const extractText = (obj: any): string => {
     if (!obj && obj !== 0) return "";
@@ -200,9 +205,8 @@ const UpgradePath: React.FC<Props> = ({ fromOptions, toOptions, addonsOptions, o
             setLoading(true);
             setResult(null);
             try {
-              const response = await fetch(
-                "https://fhnwbai-fw-team-b.hf.space/api/v1/prediction/c8052497-8650-4fee-a802-64a3b4963646",
-                {
+              if (!UPGRADE_PATH_ENDPOINT) throw new Error('Upgrade endpoint is not configured (EXPO_PUBLIC_UPGRADE_PATH_ENDPOINT)');
+              const response = await fetch(UPGRADE_PATH_ENDPOINT, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify(payload),
