@@ -27,10 +27,12 @@ import SparkChatHome from "../components/SparkChatHome";
 import TicketLanding from "../components/TicketLanding";
 import TicketList from "../components/TicketList";
 import Topbar from "../components/Topbar";
+import Translate from "../components/Translate";
 import UpgradePath from "../components/UpgradePath";
 import { useTicketData } from "../hooks/useTicketData";
 import { callSparkAI, type FlowiseHistoryMessage } from "../services/geminiService";
 import { predictPriority } from "../services/priorityService";
+import { translateTicket } from "../services/translateService";
 import { getSessionId } from "../utils/session";
 
 type DemoTicket = {
@@ -101,6 +103,15 @@ export default function Index() {
   const [loadingDots, setLoadingDots] = useState("...");
   const [hasSentInitialPrompt, setHasSentInitialPrompt] = useState(false);
   const [showFullscreenResponse, setShowFullscreenResponse] = useState(false);
+
+  const closeFullscreenResponse = () => {
+    // Prevent underlying inputs from immediately reopening the modal by ignoring focus briefly
+    setShowFullscreenResponse(false);
+    // set both a short boolean flag and a time-based suppression to be robust
+    ignoreFocusRef.current = true;
+    suppressOpenUntilRef.current = Date.now() + 600;
+    setTimeout(() => (ignoreFocusRef.current = false), 300);
+  };
   const [messages, setMessages] = useState<FlowiseHistoryMessage[]>([]);
   const [hasStartedSpark, setHasStartedSpark] = useState(false);
   const [showComposeModal, setShowComposeModal] = useState(false);
@@ -115,6 +126,7 @@ export default function Index() {
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
   const conversationHistoryRef = useRef<FlowiseHistoryMessage[]>([]);
   const scrollViewRef = useRef<ScrollView>(null);
+  const modalInputRef = useRef<any>(null);
   // Separate controllers for user-initiated calls vs lightweight/background demo calls.
   // This prevents background computations (demo-previews, on-demand hints) from
   // cancelling an active user-initiated Spark AI request.
@@ -187,6 +199,23 @@ export default function Index() {
   const [demoComputedDepartment, setDemoComputedDepartment] = useState<string>("");
   const [departmentBlinkFast, setDepartmentBlinkFast] = useState(false);
 
+  // Translate state (triggered via translate icon near ticket number)
+  const [translateLoading, setTranslateLoading] = useState(false);
+  const [translateResult, setTranslateResult] = useState<string | null>(null);
+  const [translateError, setTranslateError] = useState<string | null>(null);
+
+  // Translate Spark response state
+  const [translateSparkLoading, setTranslateSparkLoading] = useState(false);
+  const [translateSparkSuccess, setTranslateSparkSuccess] = useState(false);
+  const [translateSparkError, setTranslateSparkError] = useState<string | null>(null);
+  // Track whether the Spark response has been translated (applied) and store previous text for undo
+  const [translateSparkApplied, setTranslateSparkApplied] = useState(false);
+  const [prevLlmResponse, setPrevLlmResponse] = useState<string | null>(null);
+
+  // Demo ticket translation applied state + original backup for undo
+  const [demoTranslateApplied, setDemoTranslateApplied] = useState(false);
+  const [demoTranslateOriginal, setDemoTranslateOriginal] = useState<{ subject?: string; description?: string } | null>(null);
+
   // Handler for opening a demo ticket from the landing page
   const handleLandingSelect = (t: DemoTicket) => {
     // start fresh when selecting a demo ticket — clear any previous Spark/LLM state
@@ -199,8 +228,222 @@ export default function Index() {
     setDemoTicketDepartment((t as any).department ?? "General support");
     setDemoTicketAssigned(t.assigned_to ?? "Michael Fischer");
 
-    const id = (t["Case Number"] || "").toString().split("#")[1] || String(t["Case Number"] || "");
-    setTicketId(id);
+    // reset any demo-specific translations when opening a different ticket
+    if ((t as any)._translated) {
+      setDemoTranslateApplied(true);
+      setDemoTranslateOriginal({ subject: (t as any)._originalSubject, description: (t as any)._originalDescription });
+    } else {
+      setDemoTranslateApplied(false);
+      setDemoTranslateOriginal(null);
+    }
+
+    setTranslateResult(null);
+    setTranslateError(null);
+    setDemoTranslateApplied(false);
+    setDemoTranslateOriginal(null);
+  };
+
+  const handleTranslate = async (subject?: string, description?: string) => {
+    const s = subject ?? (selectedDemoTicket as any)?.Subject ?? "";
+    const d = description ?? (selectedDemoTicket as any)?.["Case Description"] ?? "";
+
+    if (!s && !d) {
+      setTranslateError("Kein Betreff oder Beschreibung vorhanden");
+      return;
+    }
+
+    setTranslateLoading(true);
+    setTranslateError(null);
+    setTranslateResult(null);
+
+    try {
+      const res = await translateTicket(s, d);
+      setTranslateResult(res.text);
+
+      // Overwrite demo ticket fields if parsed values are available
+      if (selectedDemoTicket && (res.subject || res.description)) {
+        // Save original values so we can undo
+        setDemoTranslateOriginal({ subject: selectedDemoTicket.Subject, description: selectedDemoTicket["Case Description"] });
+
+        const updated = { ...(selectedDemoTicket as any) } as any;
+        if (res.subject) updated.Subject = res.subject;
+        if (res.description) updated["Case Description"] = res.description;
+        setSelectedDemoTicket(updated);
+
+        setDemoTranslateApplied(true);
+      }
+    } catch (err: any) {
+      setTranslateError(String(err.message ?? err));
+    } finally {
+      setTranslateLoading(false);
+    }
+  };
+
+  const toggleDemoTranslate = async (subject?: string, description?: string) => {
+    // If applied, undo
+    if (demoTranslateApplied) {
+      if (demoTranslateOriginal) {
+        setSelectedDemoTicket((prev) => {
+          if (!prev) return prev;
+          const updated = { ...(prev as any) } as any;
+          if (demoTranslateOriginal.subject) updated.Subject = demoTranslateOriginal.subject;
+          if (demoTranslateOriginal.description) updated["Case Description"] = demoTranslateOriginal.description;
+          return updated;
+        });
+      }
+      setDemoTranslateApplied(false);
+      setDemoTranslateOriginal(null);
+      // clear translate result indicators
+      setTranslateResult(null);
+      setTranslateError(null);
+      return;
+    }
+
+    // Otherwise apply translation
+    await handleTranslate(subject, description);
+  };
+
+  const formatTranslatedText = (raw: string) => {
+    if (!raw) return "";
+    let s = String(raw);
+
+    // Normalize escaped sequences (handle double-escaped and single-escaped \n forms)
+    // Replace common double-escaped patterns like "\\n" -> "\n" then -> actual newline
+    for (let i = 0; i < 5; i++) {
+      if (s.includes('\\\\n')) s = s.replace(/\\\\r?\\n/g, '\\n');
+    }
+    // Convert any remaining escaped newline sequences ("\n" or "\r\n") into real newlines
+    s = s.replace(/\\r?\\n/g, '\n');
+    s = s.replace(/\\n/g, '\n');
+    // Also convert any literal backslash-n sequences to actual newlines
+    s = s.replace(/\\n/g, '\n');
+    s = s.replace(/\\r\\n/g, '\n');
+
+    // Now collapse any escaped newline markers that may still appear as text -> real newlines
+    s = s.replace(/\\n/g, '\n');
+
+    // Finally, replace the two-character sequence "\n" (backslash + n) with real newlines
+    s = s.replace(/\\n/g, "\n");
+
+    // Trim surrounding quotes
+    s = s.replace(/^\s*"/, '').replace(/"\s*$/, '');
+
+    // Prefer explicit labeled Description (English/German)
+    const descRegex = /(?:Description|Beschreibung)\s*[:\-]\s*([\s\S]*)/i;
+    const descMatch = s.match(descRegex);
+
+    let desc: string | undefined;
+
+    if (descMatch && descMatch[1]) {
+      desc = descMatch[1].trim();
+    } else {
+      // Split by blank line and prefer the last segment to avoid duplicated blocks
+      const parts = s.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+      if (parts.length > 1) {
+        desc = parts[parts.length - 1];
+      } else {
+        // Remove a leading Subject line if present, otherwise use the whole text
+        desc = s.replace(/^(?:Subject|Betreff)\s*[:\-]\s*[\s\S]*?\n\s*\n/i, '').trim();
+      }
+    }
+
+    if (!desc) desc = '';
+
+    // Remove any leading 'Description:' label and trim
+    desc = desc.replace(/^(?:Description|Beschreibung)\s*[:\-]\s*/i, '').trim();
+
+    // Convert any leftover literal '\\n' or '\n' sequences into real newlines
+    desc = desc.replace(/\\n/g, '\n');
+    desc = desc.replace(/\\r?\\n/g, '\n');
+    desc = desc.replace(/\\r\\n/g, '\n');
+
+    // Clean up whitespace and excessive blank lines: collapse 3+ newlines to 2 and trim edges
+    desc = desc.replace(/\t/g, ' ');
+    desc = desc.split('\n').map(line => line.replace(/[ \t]+$/, '')).join('\n');
+    desc = desc.replace(/\n{3,}/g, '\n\n').trim();
+
+    return desc;
+  };
+
+  const handleTranslateSpark = async (text?: string): Promise<string | null> => {
+    const payload = text ?? llmResponse;
+    if (!payload) return null;
+
+    setTranslateSparkLoading(true);
+    setTranslateSparkError(null);
+    setTranslateSparkSuccess(false);
+
+    try {
+      const res = await translateTicket("Spark Answer", payload);
+      console.log("translateSpark result:", res);
+
+      // Format the translated text for readability
+      const rawText = typeof res === "string" ? res : (res && (res as any).text) ? (res as any).text : "";
+      const formatted = formatTranslatedText(rawText);
+
+      // Overwrite the visible Spark response (llmResponse)
+      if (formatted) {
+        setLlmResponse(formatted);
+      }
+
+      // Update the last apiMessage in conversationHistoryRef to keep the modal chat consistent
+      const msgs = [...conversationHistoryRef.current];
+      // find the last apiMessage index
+      let lastApiIndex = -1;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === "apiMessage") {
+          lastApiIndex = i;
+          break;
+        }
+      }
+      if (lastApiIndex !== -1) {
+        msgs[lastApiIndex] = { ...msgs[lastApiIndex], content: formatted };
+        conversationHistoryRef.current = msgs;
+        setMessages([...conversationHistoryRef.current]);
+      }
+
+      setTranslateSparkSuccess(true);
+      setTimeout(() => setTranslateSparkSuccess(false), 1500);
+
+      return formatted || null;
+    } catch (err: any) {
+      setTranslateSparkError(String(err.message ?? err));
+      setTimeout(() => setTranslateSparkError(null), 3000);
+      return null;
+    } finally {
+      setTranslateSparkLoading(false);
+    }
+  };
+
+  const toggleTranslateSpark = async (text?: string) => {
+    // If currently applied, undo the translation
+    if (translateSparkApplied) {
+      if (prevLlmResponse !== null) {
+        setLlmResponse(prevLlmResponse);
+        // Restore the last apiMessage in the conversation history
+        const msgs = [...conversationHistoryRef.current];
+        let lastApiIndex = -1;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].role === "apiMessage") {
+            lastApiIndex = i;
+            break;
+          }
+        }
+        if (lastApiIndex !== -1) {
+          msgs[lastApiIndex] = { ...msgs[lastApiIndex], content: prevLlmResponse };
+          conversationHistoryRef.current = msgs;
+          setMessages([...conversationHistoryRef.current]);
+        }
+      }
+      setTranslateSparkApplied(false);
+      setPrevLlmResponse(null);
+      return;
+    }
+
+    // Otherwise, apply translation and save previous response
+    setPrevLlmResponse(llmResponse);
+    const formatted = await handleTranslateSpark(text);
+    if (formatted) setTranslateSparkApplied(true);
   };
 
   // blinking/control flags — when computed differs from demo defaults these toggle
@@ -421,12 +664,12 @@ export default function Index() {
 
   const buildInitialPrompt = (ticketContext: string) =>
     [
-      "Du bist SparkAI, ein deutschsprachiger Support-Assistent. Analysiere das folgende Ticket und formuliere eine strukturierte, pragmatische Lösung mit konkreten nächsten Schritten.",
-      "Deine Antwort muss mindestens eine fundierte Handlungsempfehlung enthalten. Wenn Informationen fehlen, stelle gezielte Rückfragen und schlage diagnostische Schritte vor.",
-      "Du darfst den Fall nur eskalieren, wenn eine unmittelbare Sicherheits-, Datenschutz- oder Eskalationsrichtlinie verletzt würde. Formulierungen wie 'Ich habe keine Lösung' sind zu vermeiden.",
-      "Ticketinformationen:",
+      "You are SparkAI, an English-speaking support assistant. Analyze the following ticket and formulate a structured, pragmatic solution with concrete next steps.",
+      "Your answer must include at least one well-founded recommendation for action. If information is missing, ask targeted follow-up questions and suggest diagnostic steps.",
+      "You may only escalate the case if there is an immediate security, data protection, or escalation policy violation. Avoid phrases like 'I have no solution.'",
+      "Ticket information:",
       ticketContext.trim(),
-      "Antworte bitte auf Deutsch und konzentriere dich ausschließlich auf die Ticketdaten.",
+      "Please answer in English and focus exclusively on the ticket data.",
     ].join("\n\n");
 
   // Reset Spark/LLM related UI and conversation state so the app returns to
@@ -545,7 +788,7 @@ export default function Index() {
     }
 
     setLoading(true);
-    setLlmResponse("Spark AI generiert Lösungsvorschlag");
+    setLlmResponse("Spark AI is generating solution" + loadingDots);
     setLoadingDots("...");
 
     try {
@@ -809,6 +1052,8 @@ export default function Index() {
   };
 
   const ignoreFocusRef = useRef(false);
+  // Timestamp until which opening fullscreen in response to focus should be suppressed
+  const suppressOpenUntilRef = useRef<number>(0);
 
   const closeComposeModal = () => {
     // Hide modal and reset compose form fields so next open starts fresh
@@ -919,7 +1164,7 @@ export default function Index() {
     // show feedback modal only when Spark AI actually produced a solution suggestion
     // (not when it's still loading or returned an error)
     const llmText = String(llmResponse || "").trim();
-    const isLLMPlaceholder = llmText === "Spark AI generiert Lösungsvorschlag" || llmText === "__LOADING__";
+    const isLLMPlaceholder = llmText === "Spark AI is generating solution" || llmText === "__LOADING__";
     const isLLMError = llmText.startsWith("Fehler");
     if (llmText && !loading && !isLLMPlaceholder && !isLLMError) {
       setShowFeedbackModal(true);
@@ -1087,8 +1332,8 @@ export default function Index() {
         }
         if (editField === "department") {
           setDemoTicketDepartment(normalized || demoTicketDepartment);
-          // Per request: when the demo ticket's department changes, reset Assigned to "Unbekannt"
-          setDemoTicketAssigned("Unbekannt");
+          // Per request: when the demo ticket's department changes, reset Assigned to "Unassigned"
+          setDemoTicketAssigned("Unassigned");
           // user saved department -> stop blinking
           setDepartmentShouldBlink(false);
           setShowDepartmentGradient(false);
@@ -1250,12 +1495,22 @@ export default function Index() {
           <View style={{ flexDirection: "row", gap: 20, alignItems: "flex-start" }}>
             {/* left column: keep the original left side content (ticket number, subject, description, avatar) */}
             <View style={{ flex: 1, gap: 8 }}>
-              <Text
-                style={{ fontSize: 16, fontWeight: "700", color: "#27253D" }}
-                numberOfLines={1}
-              >
-                {demoTicket["Case Number"]}
-              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <Text
+                  style={{ fontSize: 16, fontWeight: "700", color: "#27253D" }}
+                  numberOfLines={1}
+                >
+                  {demoTicket["Case Number"]}
+                </Text>
+
+                <TouchableOpacity onPress={() => toggleDemoTranslate(demoTicket.Subject, demoTicket["Case Description"])} style={{ padding: 6 }}>
+                  {translateLoading ? (
+                    <ActivityIndicator size="small" />
+                  ) : (
+                    <MaterialCommunityIcons name="translate" size={18} color={demoTranslateApplied ? "#A3A3A3" : "#5B60FF"} />
+                  )}
+                </TouchableOpacity>
+              </View>
 
               <Text style={{ fontSize: 20, fontWeight: "400", color: "#2E2C34" }}>
                 {demoTicket.Subject}
@@ -1264,6 +1519,8 @@ export default function Index() {
               <Text style={{ fontSize: 13, lineHeight: 20, color: "#5E5B73" }}>
                 {demoTicket["Case Description"]}
               </Text>
+
+              <Translate subject={demoTicket.Subject} description={demoTicket["Case Description"]} loading={translateLoading} result={translateResult} error={translateError} />
 
               {/* empty space reserved where the logo would have been — logo is positioned fixed at bottom-left */}
               <View style={{ height: 56 }} />
@@ -1608,23 +1865,43 @@ export default function Index() {
               }}
             >
               {llmResponse && !loading ? (
-                <TouchableOpacity
-                  onPress={() => setShowFullscreenResponse(true)}
-                  style={{ position: "absolute", top: 12, right: 12, zIndex: 10 }}
-                >
-                  <Svg width="32" height="32" viewBox="0 0 24 24">
-                    <Defs>
-                      <SvgLinearGradient id="fullscreen-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <Stop offset="0%" stopColor="#B93F4B" />
-                        <Stop offset="100%" stopColor="#451268" />
-                      </SvgLinearGradient>
-                    </Defs>
-                    <Path
-                      d="M5 5h5v2H7v3H5V5zm10 0h5v5h-2V7h-3V5zm0 14h3v-3h2v5h-5v-2zM5 14h2v3h3v2H5v-5z"
-                      fill="url(#fullscreen-gradient)"
-                    />
-                  </Svg>
-                </TouchableOpacity>
+                <View style={{ position: "absolute", top: 12, right: 12, zIndex: 10, flexDirection: "row", gap: 8 }}>
+                  <TouchableOpacity
+                    onPress={() => {
+                      // toggle translate/undo for Spark response
+                      toggleTranslateSpark(llmResponse);
+                    }}
+                    style={{ padding: 6 }}
+                  >
+                    {translateSparkLoading ? (
+                      <ActivityIndicator size="small" />
+                    ) : translateSparkSuccess ? (
+                      <MaterialCommunityIcons name="check" size={18} color="#16A34A" />
+                    ) : translateSparkError ? (
+                      <MaterialCommunityIcons name="alert-circle" size={18} color="#B93F4B" />
+                    ) : (
+                      <MaterialCommunityIcons name="translate" size={18} color={translateSparkApplied ? "#A3A3A3" : "#5B60FF"} />
+                    )}
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    onPress={() => setShowFullscreenResponse(true)}
+                    style={{ padding: 6 }}
+                  >
+                    <Svg width="32" height="32" viewBox="0 0 24 24">
+                      <Defs>
+                        <SvgLinearGradient id="fullscreen-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                          <Stop offset="0%" stopColor="#B93F4B" />
+                          <Stop offset="100%" stopColor="#451268" />
+                        </SvgLinearGradient>
+                      </Defs>
+                      <Path
+                        d="M5 5h5v2H7v3H5V5zm10 0h5v5h-2V7h-3V5zm0 14h3v-3h2v5h-5v-2zM5 14h2v3h3v2H5v-5z"
+                        fill="url(#fullscreen-gradient)"
+                      />
+                    </Svg>
+                  </TouchableOpacity>
+                </View>
               ) : null}
               <TextInput
                 style={{
@@ -1638,7 +1915,7 @@ export default function Index() {
                 editable={false}
                 value={
                   loading || sendingUserResponse
-                    ? `Spark AI generiert Lösungsvorschlag${loadingDots}`
+                    ? `Spark AI is generating a solution${loadingDots}`
                     : llmResponse
                 }
               />
@@ -1703,13 +1980,19 @@ export default function Index() {
                 value={emptyTicketNotes}
                 onChangeText={setEmptyTicketNotes}
                 onFocus={() => {
-                  // Do not open compose modal when clicking this follow-up input.
+                  // Respect a time-based suppression if modal was just closed
+                  if (suppressOpenUntilRef.current && suppressOpenUntilRef.current > Date.now()) {
+                    return;
+                  }
+                  // Do not respond to programmatic focus
                   if (ignoreFocusRef.current) {
                     ignoreFocusRef.current = false;
                     return;
                   }
-                  // keep focus but intentionally don't trigger compose modal
-                }}
+                  // Open the chat in fullscreen and focus the modal's input
+                  setShowFullscreenResponse(true);
+                  setTimeout(() => modalInputRef.current?.focus?.(), 220);
+                } }
                 placeholder=""
                 multiline
                 style={{
@@ -1773,12 +2056,24 @@ export default function Index() {
         visible={showFullscreenResponse}
         animationType="fade"
         transparent={true}
-        onRequestClose={() => setShowFullscreenResponse(false)}
+        onRequestClose={() => closeFullscreenResponse()}
       >
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: 40 }}>
           <View style={{ flex: 1, backgroundColor: "#F9F9FB", borderRadius: 16, padding: 24, shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 10, elevation: 5 }}>
-            <View style={{ flexDirection: "row", justifyContent: "flex-end", marginBottom: 16 }}>
-              <TouchableOpacity onPress={() => setShowFullscreenResponse(false)}>
+            <View style={{ flexDirection: "row", justifyContent: "flex-end", marginBottom: 16, gap: 12 }}>
+              <TouchableOpacity onPress={() => toggleTranslateSpark(llmResponse)} style={{ padding: 6 }}>
+                {translateSparkLoading ? (
+                  <ActivityIndicator size="small" />
+                ) : translateSparkSuccess ? (
+                  <MaterialCommunityIcons name="check" size={18} color="#16A34A" />
+                ) : translateSparkError ? (
+                  <MaterialCommunityIcons name="alert-circle" size={18} color="#B93F4B" />
+                ) : (
+                  <MaterialCommunityIcons name="translate" size={20} color={translateSparkApplied ? "#A3A3A3" : "#5B60FF"} />
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity onPress={() => closeFullscreenResponse()}>
                 <MaterialCommunityIcons name="close" size={28} color="#666" />
               </TouchableOpacity>
             </View>
@@ -1931,7 +2226,7 @@ export default function Index() {
                       }}
                     >
                       <Text style={{ fontSize: 14, lineHeight: 22, color: "#333" }}>
-                        Spark AI generiert Lösungsvorschlag{loadingDots}
+                        Spark AI is generating a solution{loadingDots}
                       </Text>
                     </View>
                   </LinearGradient>
@@ -1995,6 +2290,7 @@ export default function Index() {
                       </View>
                     ) : null}
                     <TextInput
+                      ref={modalInputRef}
                       value={emptyTicketNotes}
                       onChangeText={setEmptyTicketNotes}
                       placeholder=""
@@ -2261,7 +2557,7 @@ export default function Index() {
             </View>
 
             <View style={{ marginBottom: 8 }}>
-              <Text style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>An:</Text>
+              <Text style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>To:</Text>
               <TextInput value={composeTo} onChangeText={setComposeTo} style={{ borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 6, paddingHorizontal: 10, paddingVertical: 8 }} />
             </View>
 
@@ -2272,7 +2568,7 @@ export default function Index() {
 
             <View style={{ marginBottom: 10, flexDirection: "row", gap: 8, alignItems: "center" }}>
               <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Betreff:</Text>
+                <Text style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Subject:</Text>
                 <TextInput value={composeSubject} onChangeText={setComposeSubject} style={{ borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 6, paddingHorizontal: 10, paddingVertical: 8 }} />
               </View>
               <TouchableOpacity onPress={() => { insertLastSparkResponse(); }} style={{ marginLeft: 8 }}>
@@ -2281,7 +2577,7 @@ export default function Index() {
             </View>
 
             <View style={{ marginBottom: 10 }}>
-              <Text style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Beschreibung</Text>
+              <Text style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Description</Text>
 
               {/* Put formatting toolbar inside the description field container */}
               <View style={{ borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 6, backgroundColor: "white" }}>
@@ -2325,16 +2621,16 @@ export default function Index() {
             </View>
 
             <View style={{ marginBottom: 10 }}>
-              <Text style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Anhänge:</Text>
+              <Text style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Attachements:</Text>
               <View style={{ borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 6, padding: 10 }}>
                 <Text style={{ color: "#888" }}>
-                  Dateien <Text style={{ color: "#2F80ED" }}>durchsuchen</Text> oder hierher ziehen
+                  <Text style={{ color: "#2F80ED" }}>Browse</Text> or drag here
                 </Text>
               </View>
             </View>
 
             <View style={{ marginBottom: 12 }}>
-              <Text style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Anfragestatus aktualisieren zu:</Text>
+              <Text style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Update status to:</Text>
               <View style={{ flexDirection: "row", gap: 8, alignItems: "center", position: "relative" }}>
                 {/* Status pill (default Open) - click to open options */}
                 <TouchableOpacity
@@ -2380,10 +2676,10 @@ export default function Index() {
 
             <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 12 }}>
               <TouchableOpacity onPress={() => { closeComposeModal(); }} style={{ paddingHorizontal: 14, paddingVertical: 10, borderRadius: 6, borderWidth: 1, borderColor: "#E5E7EB" }}>
-                <Text>Abbrechen</Text>
+                <Text>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={sendCompose} style={{ backgroundColor: "#2F80ED", paddingHorizontal: 16, paddingVertical: 10, borderRadius: 6 }}>
-                <Text style={{ color: "white", fontWeight: "600" }}>Senden</Text>
+                <Text style={{ color: "white", fontWeight: "600" }}>Send</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -2402,12 +2698,11 @@ export default function Index() {
             <Image source={require('../assets/images/spark-logo.png')} style={{ width: 150, height: 46, resizeMode: 'contain', marginBottom: 20 }} />
 
             <Text style={{ textAlign: 'center', color: '#333', fontSize: 17, marginBottom: 12 }}>
-              Damit der SPARK künftig noch bessere Antworten liefern kann, nimm dir bitte ein paar
-              Sekunden Zeit und gib kurz Feedback:
+              To help SPARK provide even better answers in the future, please take a few seconds to give us some brief feedback:
             </Text>
 
             <Text style={{ fontWeight: '700', color: '#9E2F5B', fontSize: 18, marginTop: 12, marginBottom: 50 }}>
-              Wie hilfreich war die Antwort von SPARK?
+              How helpful was SPARK's answer?
             </Text>
 
             <View style={{ flexDirection: 'row', gap: 10, marginBottom: 18 }}>
@@ -2436,23 +2731,23 @@ export default function Index() {
             </View>
 
             <View style={{ flexDirection: 'row', justifyContent: 'center', width: '60%', alignSelf: 'center', paddingHorizontal: 12, marginBottom: 16, marginTop: 50 }}>
-              <Text style={{ color: '#9E2F5B', fontSize: 13, marginRight: 10 }}>1 = Sehr schlecht</Text>
-              <Text style={{ color: '#7C2F6B', fontSize: 13 }}>10 = Sehr hilfreich</Text>
+              <Text style={{ color: '#9E2F5B', fontSize: 13, marginRight: 10 }}>1 = Very bad</Text>
+              <Text style={{ color: '#7C2F6B', fontSize: 13 }}>10 = Very helpful</Text>
             </View>
 
             {!feedbackSubmitted ? (
               feedbackRating ? (
                 <TouchableOpacity onPress={() => submitFeedback()} style={{ paddingHorizontal: 36, paddingVertical: 12, borderRadius: 6, backgroundColor: '#9E2F5B' }}>
-                  <Text style={{ fontSize: 16, color: 'white' }}>Senden</Text>
+                  <Text style={{ fontSize: 16, color: 'white' }}>Send</Text>
                 </TouchableOpacity>
                 ) : (
                 <TouchableOpacity onPress={() => closeFeedback()} style={{ paddingHorizontal: 42, paddingVertical: 14, borderRadius: 6, borderWidth: 1, marginTop: 30, borderColor: '#E5E5E5' }}>
-                  <Text style={{ fontSize: 16 }}>Überspringen</Text>
+                  <Text style={{ fontSize: 16 }}>Skip</Text>
                 </TouchableOpacity>
               )
             ) : (
               <View style={{ paddingVertical: 22 }}>
-                <Text style={{ fontSize: 16, fontWeight: '600' }}>Danke für dein Feedback</Text>
+                <Text style={{ fontSize: 16, fontWeight: '600' }}>Thank you for your feedback</Text>
               </View>
             )}
           </View>

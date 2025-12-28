@@ -11,8 +11,8 @@ type Props = {
   onChange?: (from: string, to: string, addon: string | null) => void;
 };
 
-const defaultFrom = ["R9C", "R10","R11","R14A","R14B","R16B", "R18"];
-const defaultTo = ["R9C", "R10","R11","R14A","R14B","R16B", "R18"];
+const defaultFrom = ["R15A", "R15B","R16A","R16B","R17A","R18"];
+const defaultTo = ["R15A", "R15B","R16A","R16B","R17A","R18"];
 const defaultAddons = ["None", "ALS", "Hardening", "FO's", "DIRAC"];
 
 const Dropdown: React.FC<{
@@ -20,14 +20,19 @@ const Dropdown: React.FC<{
   options: string[];
   value: string;
   onChange: (value: string) => void;
+  onOpen?: (open: boolean) => void;
   style?: any;
-}> = ({ label, options, value, onChange, style }) => {
+}> = ({ label, options, value, onChange, onOpen, style }) => {
   const [open, setOpen] = React.useState(false);
   return (
     <View style={{ minWidth: 120 }}>
       <TouchableOpacity
         activeOpacity={0.85}
-        onPress={() => setOpen((s) => !s)}
+        onPress={() => setOpen((s) => {
+          const next = !s;
+          onOpen?.(next);
+          return next;
+        })}
         style={{
           borderWidth: 1,
           borderColor: "#E5E7EB",
@@ -53,6 +58,7 @@ const Dropdown: React.FC<{
               onPress={() => {
                 onChange(o);
                 setOpen(false);
+                onOpen?.(false);
               }}
               style={{ paddingVertical: 8, paddingHorizontal: 8, borderRadius: 6 }}
             >
@@ -149,6 +155,11 @@ const UpgradePath: React.FC<Props> = ({ fromOptions, toOptions, addonsOptions, o
     onChange?.(from, to, addon);
   }, [from, to, addon]);
 
+  const handleDropdownOpen = (open: boolean) => {
+    // If user opens a dropdown and there is a result shown, hide it
+    if (open && result) setResult(null);
+  };
+
   const labelStyle: TextStyle = { color: "#6B7280", fontWeight: "700", marginBottom: 6 };
 
   const GradientText: React.FC<{ text: string; fontSize?: number; fontWeight?: string; style?: any }> = ({ text, fontSize = 16, fontWeight = '700', style }) => {
@@ -186,16 +197,16 @@ const UpgradePath: React.FC<Props> = ({ fromOptions, toOptions, addonsOptions, o
       <View style={{ flexDirection: "row", gap: 12, alignItems: "center", justifyContent: "space-between" }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1 }}>
            <GradientText text="From" fontSize={23} style={{ marginRight: -40 }} />
-          <Dropdown options={fromList} value={from} onChange={setFrom} />
+          <Dropdown options={fromList} value={from} onChange={setFrom} onOpen={handleDropdownOpen} />
 
           <GradientText text="to" fontSize={23} style={{ marginLeft: 100, marginRight: 0 }} />
 
           <View style={{ marginLeft: -70 }}>
-            <Dropdown options={toList} value={to} onChange={setTo} />
+            <Dropdown options={toList} value={to} onChange={setTo} onOpen={handleDropdownOpen} />
           </View>
 
  <GradientText text="Add-ons" fontSize={23} style={{ marginLeft: 150, marginRight: -10 }} />
-          <Dropdown options={addonsList} value={addon ?? ""} onChange={(v) => setAddon(v)} />
+          <Dropdown options={addonsList} value={addon ?? ""} onChange={(v) => setAddon(v)} onOpen={handleDropdownOpen} />
 
             
  <TouchableOpacity activeOpacity={0.9} onPress={async () => {

@@ -167,6 +167,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeKey = "tickets", onSelec
           );
         })}
       </View>
+
+      {/* English language indicator at the bottom */}
+      <View style={{ position: "absolute", bottom: 40, left: 0, right: 0, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 8 }}>
+        <MaterialCommunityIcons name="web" size={30} color="#000000ff" />
+        <Text style={{ color: "#000000ff", fontWeight: "600", fontSize: 14 }}>EN</Text>
+      </View>
     </View>
   );
 };

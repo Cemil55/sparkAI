@@ -9,7 +9,7 @@ type Props = {
   onSend?: (text: string) => void;
 };
 
-const SparkChatHome: React.FC<Props> = ({ userName = 'Sam', placeholder = 'Stelle irgendeine Frage', onSend }) => {
+const SparkChatHome: React.FC<Props> = ({ userName = 'Sam', placeholder = 'Ask any question', onSend }) => {
   const [value, setValue] = React.useState('');
   const [sending, setSending] = React.useState(false);
   const [messages, setMessages] = React.useState<Array<{ id: number; role: 'user' | 'bot' | 'loading'; text: string }>>([]);
@@ -141,15 +141,15 @@ const SparkChatHome: React.FC<Props> = ({ userName = 'Sam', placeholder = 'Stell
             y="36"
             textAnchor="middle"
           >
-            {`Was kann ich für dich tun, ${userName}?`}
+            {`What can I do for you?, ${userName}?`}
           </SvgText>
         </Svg>
       </View>
       )}
 
       {/* Messages area (chat timeline) */}
-      <View style={{ width: '85%', maxWidth: 1100, marginBottom: 10, minHeight: 10 }}>
-        <ScrollView ref={scrollRef} contentContainerStyle={{ padding: 12, gap: 12 }}>
+      <View style={{ width: '100%', maxWidth: 1500, paddingRight: 20, paddingLeft: 20, marginBottom: 10, minHeight: 10, maxHeight: '80%', alignSelf: 'stretch' }}>
+        <ScrollView ref={scrollRef} contentContainerStyle={{ padding: 12, gap: 12, flexGrow: 1, paddingBottom: 24 }} style={{ flex: 1, width: '100%' }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
           {messages.map((m) => {
             if (m.role === 'user') {
               return (
