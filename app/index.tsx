@@ -127,6 +127,7 @@ export default function Index() {
   const conversationHistoryRef = useRef<FlowiseHistoryMessage[]>([]);
   const scrollViewRef = useRef<ScrollView>(null);
   const modalInputRef = useRef<any>(null);
+  const composeBodyRef = useRef<any>(null);
   // Separate controllers for user-initiated calls vs lightweight/background demo calls.
   // This prevents background computations (demo-previews, on-demand hints) from
   // cancelling an active user-initiated Spark AI request.
@@ -1844,7 +1845,7 @@ export default function Index() {
             alignItems: "stretch",
             gap: 12,
             marginBottom: 24,
-            marginTop: 10,
+            marginTop: 100,
             width: "100%",
           }}
         >
@@ -1971,7 +1972,7 @@ export default function Index() {
                       x="0"
                       y={14}
                     >
-                      Do you have any questions about Spark's answer?
+                      Ask SparkAI
                     </SvgText>
                   </Svg>
                 </View>
@@ -1995,6 +1996,11 @@ export default function Index() {
                 } }
                 placeholder=""
                 multiline
+                onKeyPress={(e) => {
+                  if (e.nativeEvent.key === "Enter") {
+                    handleSendUserResponse(emptyTicketNotes);
+                  }
+                }}
                 style={{
                   width: "100%",
                   minHeight: 40,
@@ -2011,37 +2017,7 @@ export default function Index() {
             </View>
           </View>
 
-          <TouchableOpacity
-            onPress={() => handleSendUserResponse(emptyTicketNotes)}
-            disabled={sendingUserResponse}
-            style={{
-              width: 180,
-              height: 50,
-              borderRadius: 5,
-              overflow: "hidden",
-              marginTop: 18,
-            }}
-          >
-            <LinearGradient
-              colors={["#451268", "#B93F4B"]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={{
-                flex: 1,
-                justifyContent: "center",
-                alignItems: "center",
-                opacity: sendingUserResponse ? 0.6 : 1,
-              }}
-            >
-              {sendingUserResponse ? (
-                <ActivityIndicator color="white" />
-              ) : (
-                <Text style={{ color: "white", fontWeight: "bold", fontSize: 12 }}>
-                  Antwort senden
-                </Text>
-              )}
-            </LinearGradient>
-          </TouchableOpacity>
+          {/* Antwort senden entfernt */}
         </View>)}
         </>)}
         
@@ -2256,6 +2232,7 @@ export default function Index() {
                     shadowOpacity: 0.06,
                     shadowRadius: 12,
                     elevation: 4,
+                    paddingRight: 100,
                   }}
                 >
                   <View style={{ position: "relative" }}>
@@ -2284,7 +2261,7 @@ export default function Index() {
                             x="0"
                             y={14}
                           >
-                            Do you have any questions about Spark's answer?
+                            Ask SparkAI
                           </SvgText>
                         </Svg>
                       </View>
@@ -2295,6 +2272,11 @@ export default function Index() {
                       onChangeText={setEmptyTicketNotes}
                       placeholder=""
                       multiline
+                      onKeyPress={(e) => {
+                        if (e.nativeEvent.key === "Enter") {
+                          handleSendUserResponse(emptyTicketNotes);
+                        }
+                      }}
                       style={{
                         width: "100%",
                         minHeight: 40,
@@ -2303,49 +2285,58 @@ export default function Index() {
                         borderRadius: 12,
                         paddingHorizontal: 16,
                         paddingVertical: 2,
+                        paddingRight: 76,
                         fontSize: 13,
                         color: "#333",
                         backgroundColor: "#F9FAFB",
                       }}
                     />
-                  </View>
-                </View>
+                  {/* Send button placed inside text field (absolute) */}
 
-                <TouchableOpacity
-                  onPress={() => handleSendUserResponse(emptyTicketNotes)}
-                  disabled={sendingUserResponse}
-                  style={{
-                    width: 180,
-                    height: 44,
-                    borderRadius: 5,
-                    overflow: "hidden",
-                    marginTop: 20,
-                  }}
-                >
-                  <LinearGradient
-                    colors={["#451268", "#B93F4B"]}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 0 }}
+                  <TouchableOpacity
+                    onPress={() => {
+                      // Close fullscreen chat (with suppression) so the ticket is visible behind
+                      closeFullscreenResponse();
+                      // Open compose (Antwort) modal and insert Spark's answer into the Description
+                      setShowComposeModal(true);
+                      // Insert the LLM response after the modal opens (fallback to current input)
+                      setTimeout(() => {
+                        setComposeBody(llmResponse ? llmResponse : emptyTicketNotes);
+                        composeBodyRef.current?.focus?.();
+                      }, 60);
+                    }}
+                    disabled={sendingUserResponse}
                     style={{
-                      flex: 1,
-                      justifyContent: "center",
+                      position: "absolute",
+                      right: -70,
+                      top: "50%",
+                      transform: [{ translateY: -24 }],
+                      width: 48,
+                      height: 48,
+                      borderRadius: 8,
                       alignItems: "center",
-                      opacity: sendingUserResponse ? 0.6 : 1,
+                      justifyContent: "center",
+                      backgroundColor: sendingUserResponse ? "#F3F4F6" : "white",
+                      shadowColor: "#000",
+                      shadowOffset: { width: 0, height: 2 },
+                      shadowOpacity: 0.06,
+                      shadowRadius: 4,
+                      elevation: 2,
                     }}
                   >
                     {sendingUserResponse ? (
-                      <ActivityIndicator color="white" />
+                      <ActivityIndicator size="small" color="#B93F4B" />
                     ) : (
-                      <Text style={{ color: "white", fontWeight: "bold", fontSize: 12 }}>
-                        Antwort senden
-                      </Text>
+                      <Image source={require("../assets/SVGs/sendSpark.png")} style={{ width: 34, height: 34, resizeMode: "contain" }} />
                     )}
-                  </LinearGradient>
-                </TouchableOpacity>
+                  </TouchableOpacity>
+
+                </View>
               </View>
             </View>
           </View>
         </View>
+      </View>
       </Modal>
 
       {/* Edit modal for Status / Priority / Department */}

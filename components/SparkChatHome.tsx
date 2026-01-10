@@ -141,7 +141,7 @@ const SparkChatHome: React.FC<Props> = ({ userName = 'Sam', placeholder = 'Ask a
             y="36"
             textAnchor="middle"
           >
-            {`What can I do for you?, ${userName}?`}
+            {`What can I do for you, ${userName}?`}
           </SvgText>
         </Svg>
       </View>
