@@ -878,15 +878,16 @@ export default function Index() {
       setUserResponse("");
       setHasSentInitialPrompt(true);
 
-      const newMsgs: FlowiseHistoryMessage[] = [
-        { role: "userMessage", content: messageForSpark },
-        { role: "apiMessage", content: response },
-      ];
+      // For the initial ticket analysis, do NOT add the full initial prompt to the visible chat
+      // (we only append the assistant's response). For subsequent interactions, keep both messages.
+      const newMsgs: FlowiseHistoryMessage[] = hasSentInitialPrompt
+        ? [
+            { role: "userMessage", content: messageForSpark },
+            { role: "apiMessage", content: response },
+          ]
+        : [{ role: "apiMessage", content: response }];
 
-      conversationHistoryRef.current = [
-        ...conversationHistoryRef.current,
-        ...newMsgs,
-      ];
+      conversationHistoryRef.current = [...conversationHistoryRef.current, ...newMsgs];
       setMessages(conversationHistoryRef.current);
 
       if (priorityPromise) {
@@ -1046,7 +1047,11 @@ export default function Index() {
   };
 
   const openComposeModal = (initialSubject?: string, target?: string | "demo") => {
-    if (initialSubject) setComposeSubject(initialSubject);
+    // Always prefix the compose subject with the ticket id when available
+    const ticketId = target === "demo" ? String((selectedDemoTicket as any)?.["Case Number"] || "") : String(currentTicket?.id || "");
+    const baseSubject = initialSubject ?? "";
+    const subjectWithPrefix = ticketId ? (baseSubject ? `${ticketId} - ${baseSubject}` : `${ticketId}`) : baseSubject;
+    setComposeSubject(subjectWithPrefix);
     setComposeBody("");
     setShowComposeModal(true);
     setComposeTarget(typeof target === "string" ? target : null);
@@ -1702,7 +1707,7 @@ export default function Index() {
             <TextInput
               value={demoNotes}
               onChangeText={setDemoNotes}
-              placeholder="Type your response here..."
+              placeholder="Type your response for the customer here..."
               onFocus={() => { if (ignoreFocusRef.current) { ignoreFocusRef.current = false; return; } openComposeModal(`RE: ${demoTicket.Subject}`, "demo"); }}
               placeholderTextColor="#9CA3AF"
               multiline
@@ -1724,6 +1729,18 @@ export default function Index() {
           <TouchableOpacity
             activeOpacity={0.8}
             onPress={async () => {
+              // Compute the current ticket case id (cleaned)
+              const currentCase = selectedDemoTicket ? String((selectedDemoTicket as any)["Case Number"] || "").trim() : null;
+
+              // If Spark was already started for this exact ticket, don't re-send — just open the chat so user can review it
+              if (hasStartedSpark && currentCase && analysisTicket?.id && String(analysisTicket.id) === currentCase) {
+                setShowFullscreenResponse(true);
+                return;
+              }
+
+              // Otherwise open the fullscreen chat and start analysis
+              setShowFullscreenResponse(true);
+
               // run sparkAI analysis for this ticket but DON'T switch the UI focus (won't change department/current ticket)
               // Also explicitly send the exact ticket payload to the priority endpoint so we know exactly what it receives.
               // Ensure demo department recommendation is always Hardware Support when the
@@ -1759,7 +1776,6 @@ export default function Index() {
               })();
 
               // Call Spark AI analysis immediately (keep focus=false so UI doesn't change)
-              // tell the LLM to analyze the currently-displayed demo ticket
                 // if a demo is selected, analyze it; otherwise, nothing
                 if (!selectedDemoTicket) {
                   alert("Bitte wählen Sie zuerst ein Demo-Ticket aus der Liste aus.");
@@ -1838,187 +1854,8 @@ export default function Index() {
         </View>
         {/* Priority & Department inline badges removed per request (no longer needed). */}
         
-        {hasStartedSpark && (
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "stretch",
-            gap: 12,
-            marginBottom: 24,
-            marginTop: 100,
-            width: "100%",
-          }}
-        >
-          <LinearGradient
-            colors={["#B93F4B", "#451268"]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={{ flex: 1, borderRadius: 16, padding: 3 }}
-          >
-            <View
-              style={{
-                flex: 1,
-                backgroundColor: "white",
-                borderRadius: 13,
-                padding: 20,
-                minHeight: 300,
-                position: "relative",
-              }}
-            >
-              {llmResponse && !loading ? (
-                <View style={{ position: "absolute", top: 12, right: 12, zIndex: 10, flexDirection: "row", gap: 8 }}>
-                  <TouchableOpacity
-                    onPress={() => {
-                      // toggle translate/undo for Spark response
-                      toggleTranslateSpark(llmResponse);
-                    }}
-                    style={{ padding: 6 }}
-                  >
-                    {translateSparkLoading ? (
-                      <ActivityIndicator size="small" />
-                    ) : translateSparkSuccess ? (
-                      <MaterialCommunityIcons name="check" size={18} color="#16A34A" />
-                    ) : translateSparkError ? (
-                      <MaterialCommunityIcons name="alert-circle" size={18} color="#B93F4B" />
-                    ) : (
-                      <MaterialCommunityIcons name="translate" size={18} color={translateSparkApplied ? "#A3A3A3" : "#5B60FF"} />
-                    )}
-                  </TouchableOpacity>
 
-                  <TouchableOpacity
-                    onPress={() => setShowFullscreenResponse(true)}
-                    style={{ padding: 6 }}
-                  >
-                    <Svg width="32" height="32" viewBox="0 0 24 24">
-                      <Defs>
-                        <SvgLinearGradient id="fullscreen-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                          <Stop offset="0%" stopColor="#B93F4B" />
-                          <Stop offset="100%" stopColor="#451268" />
-                        </SvgLinearGradient>
-                      </Defs>
-                      <Path
-                        d="M5 5h5v2H7v3H5V5zm10 0h5v5h-2V7h-3V5zm0 14h3v-3h2v5h-5v-2zM5 14h2v3h3v2H5v-5z"
-                        fill="url(#fullscreen-gradient)"
-                      />
-                    </Svg>
-                  </TouchableOpacity>
-                </View>
-              ) : null}
-              <TextInput
-                style={{
-                  flex: 1,
-                  fontSize: 13,
-                  lineHeight: 20,
-                  color: "#333",
-                  textAlignVertical: "top",
-                }}
-                multiline
-                editable={false}
-                value={
-                  loading || sendingUserResponse
-                    ? `Spark AI is generating a solution${loadingDots}`
-                    : llmResponse
-                }
-              />
-            </View>
-          </LinearGradient>
-        </View>)}
-        {hasStartedSpark && (
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "stretch",
-            gap: 12,
-            marginBottom: 24,
-            width: "100%",
-          }}
-        >
-          <View
-            style={{
-              flex: 1,
-              backgroundColor: "white",
-              borderRadius: 16,
-              padding: 20,
-              shadowColor: "#000",
-              shadowOffset: { width: 0, height: 6 },
-              shadowOpacity: 0.06,
-              shadowRadius: 12,
-              elevation: 4,
-            }}
-          >
-            <View style={{ position: "relative" }}>
-              {emptyTicketNotes.trim().length === 0 ? (
-                <View
-                  pointerEvents="none"
-                  style={{ position: "absolute", left: 16, right: 16, top: 10, height: 20 }}
-                >
-                  <Svg width="100%" height="20">
-                    <Defs>
-                      <SvgLinearGradient
-                        id="empty-ticket-gradient"
-                        x1="0%"
-                        y1="0%"
-                        x2="100%"
-                        y2="0%"
-                      >
-                        <Stop offset="0%" stopColor="#B93F4B" />
-                        <Stop offset="100%" stopColor="#451268" />
-                      </SvgLinearGradient>
-                    </Defs>
-                    <SvgText
-                      fill="url(#empty-ticket-gradient)"
-                      fontSize={13}
-                      fontWeight="400"
-                      x="0"
-                      y={14}
-                    >
-                      Ask SparkAI
-                    </SvgText>
-                  </Svg>
-                </View>
-              ) : null}
-              <TextInput
-                value={emptyTicketNotes}
-                onChangeText={setEmptyTicketNotes}
-                onFocus={() => {
-                  // Respect a time-based suppression if modal was just closed
-                  if (suppressOpenUntilRef.current && suppressOpenUntilRef.current > Date.now()) {
-                    return;
-                  }
-                  // Do not respond to programmatic focus
-                  if (ignoreFocusRef.current) {
-                    ignoreFocusRef.current = false;
-                    return;
-                  }
-                  // Open the chat in fullscreen and focus the modal's input
-                  setShowFullscreenResponse(true);
-                  setTimeout(() => modalInputRef.current?.focus?.(), 220);
-                } }
-                placeholder=""
-                multiline
-                onKeyPress={(e) => {
-                  if (e.nativeEvent.key === "Enter") {
-                    handleSendUserResponse(emptyTicketNotes);
-                  }
-                }}
-                style={{
-                  width: "100%",
-                  minHeight: 40,
-                  borderWidth: 1,
-                  borderColor: "#E5E7EB",
-                  borderRadius: 12,
-                  paddingHorizontal: 16,
-                  paddingVertical: 2,
-                  fontSize: 13,
-                  color: "#333",
-                  backgroundColor: "#F9FAFB",
-                }}
-              />
-            </View>
-          </View>
 
-          {/* Antwort senden entfernt */}
-        </View>)}
         </>)}
         
           {/* TicketList ganz unten anzeigen */}
@@ -2274,7 +2111,14 @@ export default function Index() {
                       multiline
                       onKeyPress={(e) => {
                         if (e.nativeEvent.key === "Enter") {
-                          handleSendUserResponse(emptyTicketNotes);
+                          // Remove any trailing newline that may have been inserted by the TextInput
+                          const textToSend = (emptyTicketNotes || "").replace(/\n$/, "");
+                          // Clear the input immediately so the UI doesn't show the newline
+                          setEmptyTicketNotes("");
+                          // Send using the cleaned text
+                          handleSendUserResponse(textToSend);
+                          // Blur the input to dismiss keyboard and prevent further changes
+                          modalInputRef.current?.blur?.();
                         }
                       }}
                       style={{
@@ -2297,7 +2141,10 @@ export default function Index() {
                     onPress={() => {
                       // Close fullscreen chat (with suppression) so the ticket is visible behind
                       closeFullscreenResponse();
-                      // Open compose (Antwort) modal and insert Spark's answer into the Description
+                      // Open compose (Antwort) modal, prefilling subject with ticket id + title, and insert Spark's answer into the Description
+                      const ticketIdForSubject = analysisTicket?.id ?? (selectedDemoTicket as any)?.["Case Number"] ?? currentTicket?.id ?? "";
+                      const ticketTitleForSubject = analysisTicket?.subject ?? (selectedDemoTicket as any)?.Subject ?? currentTicket?.subject ?? "";
+                      setComposeSubject(ticketIdForSubject ? (ticketTitleForSubject ? `${ticketIdForSubject} - ${ticketTitleForSubject}` : `${ticketIdForSubject}`) : ticketTitleForSubject);
                       setShowComposeModal(true);
                       // Insert the LLM response after the modal opens (fallback to current input)
                       setTimeout(() => {
@@ -2562,9 +2409,6 @@ export default function Index() {
                 <Text style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Subject:</Text>
                 <TextInput value={composeSubject} onChangeText={setComposeSubject} style={{ borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 6, paddingHorizontal: 10, paddingVertical: 8 }} />
               </View>
-              <TouchableOpacity onPress={() => { insertLastSparkResponse(); }} style={{ marginLeft: 8 }}>
-                <Image source={require("../assets/images/spark-logo.png")} style={{ width: 72, height: 36, marginTop: 20, resizeMode: "contain" }} />
-              </TouchableOpacity>
             </View>
 
             <View style={{ marginBottom: 10 }}>
@@ -2597,6 +2441,30 @@ export default function Index() {
                   <MaterialCommunityIcons name="format-indent-decrease" size={18} color="#444" />
                   <MaterialCommunityIcons name="link-variant" size={18} color="#444" />
                   <MaterialCommunityIcons name="emoticon-outline" size={18} color="#444" />
+                  <TouchableOpacity onPress={() => insertLastSparkResponse()} style={{ padding: 6 }}>
+                    <Image source={require("../assets/SVGs/sendSpark.png")} style={{ width: 18, height: 18, resizeMode: "contain" }} />
+                  </TouchableOpacity>
+
+                  <View style={{ justifyContent: "center", paddingLeft: 0 }}>
+                    <Svg width="200" height="20">
+                      <Defs>
+                        <SvgLinearGradient id="add-spark-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                          <Stop offset="0%" stopColor="#B93F4B" />
+                          <Stop offset="100%" stopColor="#451268" />
+                        </SvgLinearGradient>
+                      </Defs>
+                      <SvgText
+                        fill="url(#add-spark-grad)"
+                        fontSize={12}
+                        fontWeight="600"
+                        x="0"
+                        y={14}
+                      >
+                        Add solution from SparkAI
+                      </SvgText>
+                    </Svg>
+                  </View>
+
                   <View style={{ flex: 1 }} />
                   <MaterialCommunityIcons name="undo" size={16} color="#888" />
                   <MaterialCommunityIcons name="redo" size={16} color="#888" />
