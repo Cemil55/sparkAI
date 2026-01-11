@@ -20,6 +20,7 @@ import Svg, {
   Stop,
   LinearGradient as SvgLinearGradient,
   Text as SvgText,
+  TSpan
 } from "react-native-svg";
 import Sidebar from "../components/Sidebar";
 import { SparkAILogo } from "../components/SparkAILogo";
@@ -212,6 +213,9 @@ export default function Index() {
   // Track whether the Spark response has been translated (applied) and store previous text for undo
   const [translateSparkApplied, setTranslateSparkApplied] = useState(false);
   const [prevLlmResponse, setPrevLlmResponse] = useState<string | null>(null);
+
+  // Restart button specific loading (only true when the user clicks restart)
+  const [restartLoading, setRestartLoading] = useState(false);
 
   // Demo ticket translation applied state + original backup for undo
   const [demoTranslateApplied, setDemoTranslateApplied] = useState(false);
@@ -446,6 +450,36 @@ export default function Index() {
     const formatted = await handleTranslateSpark(text);
     if (formatted) setTranslateSparkApplied(true);
   };
+
+  const handleRestartSpark = async () => {
+    // Clear the conversation and re-run the Spark analysis for the current ticket
+    conversationHistoryRef.current = [];
+    setMessages([]);
+    setHasSentInitialPrompt(false);
+
+    const idToUse = (analysisTicket && (analysisTicket as any).id) || (currentTicket && (currentTicket as any).id);
+    if (!idToUse) {
+      alert("Kein Ticket ausgewählt");
+      return;
+    }
+
+    // Normalize and set the analysis ticket id so comparisons are reliable
+    const cleanIdToUse = String(idToUse).replace(/^(Ticket)?#?/i, "").trim();
+    setAnalysisTicket((prev: any) => ({ ...(prev ?? {}), id: cleanIdToUse }));
+
+    // Run the restart flow and show spinner only for this button. Mark the Spark-as-started
+    // only after the restart completes successfully so we don't short-circuit on failures.
+    setRestartLoading(true);
+    try {
+      await handleSendToLLM(idToUse, { focus: false, forceInitialPrompt: true });
+      setHasStartedSpark(true);
+    } catch (err) {
+      console.warn("Restart Spark failed:", err);
+      throw err;
+    } finally {
+      setRestartLoading(false);
+    }
+  }; 
 
   // blinking/control flags — when computed differs from demo defaults these toggle
   const [priorityShouldBlink, setPriorityShouldBlink] = useState(false);
@@ -735,7 +769,7 @@ export default function Index() {
 
   // overrideTicketId: optional id to analyze
   // opts.focus: when false, we run analysis for the id but DO NOT switch the UI to that ticket
-  const handleSendToLLM = async (overrideTicketId?: string | any, opts?: { focus?: boolean }) => {
+  const handleSendToLLM = async (overrideTicketId?: string | any, opts?: { focus?: boolean; forceInitialPrompt?: boolean } = {}) => {
     const focus = opts?.focus ?? true;
     const specificId = typeof overrideTicketId === "string" ? overrideTicketId : undefined;
     let activeTicket = currentTicket;
@@ -859,9 +893,9 @@ export default function Index() {
       }
 
       const sessionForCall = await getSessionId();
-      const messageForSpark = hasSentInitialPrompt
-        ? activeDescription.trim()
-        : buildInitialPrompt(ticketContext);
+      const messageForSpark = opts?.forceInitialPrompt
+        ? buildInitialPrompt(ticketContext)
+        : (hasSentInitialPrompt ? activeDescription.trim() : buildInitialPrompt(ticketContext));
       const signal = startSparkUserCall();
       let response: string;
       try {
@@ -880,7 +914,8 @@ export default function Index() {
 
       // For the initial ticket analysis, do NOT add the full initial prompt to the visible chat
       // (we only append the assistant's response). For subsequent interactions, keep both messages.
-      const newMsgs: FlowiseHistoryMessage[] = hasSentInitialPrompt
+      // When forceInitialPrompt is used (restart), treat the call like initial run and hide the user message.
+      const newMsgs: FlowiseHistoryMessage[] = (hasSentInitialPrompt && !opts?.forceInitialPrompt)
         ? [
             { role: "userMessage", content: messageForSpark },
             { role: "apiMessage", content: response },
@@ -1512,8 +1547,18 @@ export default function Index() {
                 <TouchableOpacity onPress={() => toggleDemoTranslate(demoTicket.Subject, demoTicket["Case Description"])} style={{ padding: 6 }}>
                   {translateLoading ? (
                     <ActivityIndicator size="small" />
+                  ) : demoTranslateApplied ? (
+                    <MaterialCommunityIcons name="translate" size={18} color="#A3A3A3" />
                   ) : (
-                    <MaterialCommunityIcons name="translate" size={18} color={demoTranslateApplied ? "#A3A3A3" : "#5B60FF"} />
+                    <Svg width={18} height={18} viewBox="0 0 20 20">
+                      <Defs>
+                        <SvgLinearGradient id="translate-grad-demo" x1="0%" y1="0%" x2="100%" y2="0%">
+                          <Stop offset="0%" stopColor="#B93F4B" />
+                          <Stop offset="100%" stopColor="#451268" />
+                        </SvgLinearGradient>
+                      </Defs>
+                      <Path d="M7.41 9l2.24 2.24-.83 2L6 10.4l-3.3 3.3-1.4-1.42L4.58 9l-.88-.88c-.53-.53-1-1.3-1.3-2.12h2.2c.15.28.33.53.51.7l.89.9.88-.88C7.48 6.1 8 4.84 8 4H0V2h5V0h2v2h5v2h-2c0 1.37-.74 3.15-1.7 4.12L7.4 9zm3.84 8L10 20H8l5-12h2l5 12h-2l-1.25-3h-5.5zm.83-2h3.84L14 10.4 12.08 15z" fill="url(#translate-grad-demo)" />
+                    </Svg>
                   )}
                 </TouchableOpacity>
               </View>
@@ -1732,8 +1777,13 @@ export default function Index() {
               // Compute the current ticket case id (cleaned)
               const currentCase = selectedDemoTicket ? String((selectedDemoTicket as any)["Case Number"] || "").trim() : null;
 
+              // Normalize IDs for robust comparison (strip optional 'Ticket' prefix and whitespace)
+              const normalizeId = (val?: any) => String(val ?? "").replace(/^(Ticket)?#?/i, "").trim();
+              const clickedId = currentCase ? normalizeId(currentCase) : (currentTicket ? normalizeId(currentTicket.id) : "");
+              const analyzedId = analysisTicket ? normalizeId(analysisTicket.id) : "";
+
               // If Spark was already started for this exact ticket, don't re-send — just open the chat so user can review it
-              if (hasStartedSpark && currentCase && analysisTicket?.id && String(analysisTicket.id) === currentCase) {
+              if (hasStartedSpark && clickedId && analyzedId && analyzedId === clickedId) {
                 setShowFullscreenResponse(true);
                 return;
               }
@@ -1813,13 +1863,13 @@ export default function Index() {
             }}
             disabled={loading}
             style={{
-              width: 150,
+              width: 200,
               minHeight: 80,
               borderRadius: 12,
               shadowColor: "#000",
               shadowOffset: { width: 0, height: 2 },
               shadowOpacity: 0.08,
-              shadowRadius: 4,
+              shadowRadius: 40,
               elevation: 3,
             }}
           >
@@ -1830,7 +1880,7 @@ export default function Index() {
               style={{
                 flex: 1,
                 borderRadius: 12,
-                padding: 2,
+                padding: 3,
                 overflow: "hidden",
               }}
             >
@@ -1841,12 +1891,15 @@ export default function Index() {
                   backgroundColor: "white",
                   alignItems: "center",
                   justifyContent: "center",
-                  paddingVertical: 8,
+                  paddingVertical: 10,
+                  flexDirection: "row",
+                  gap: 0,
+                  paddingRight: 0,
                 }}
               >
                 <Image
                   source={require("../assets/images/spark-logo.png")}
-                  style={{ width: 64, height: 32, resizeMode: "contain" }}
+                  style={{ width: 128, height: 64, resizeMode: "contain" }}
                 />
               </View>
             </LinearGradient>
@@ -1874,6 +1927,26 @@ export default function Index() {
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: 40 }}>
           <View style={{ flex: 1, backgroundColor: "#F9F9FB", borderRadius: 16, padding: 24, shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 10, elevation: 5 }}>
             <View style={{ flexDirection: "row", justifyContent: "flex-end", marginBottom: 16, gap: 12 }}>
+              <TouchableOpacity onPress={() => handleRestartSpark()} style={{ padding: 6, opacity: restartLoading ? 0.6 : 1 }} disabled={restartLoading}>
+                {restartLoading ? (
+                  <ActivityIndicator size="small" />
+                ) : (
+                  <Svg width={140} height={20} viewBox="0 0 140 20">
+                    <Defs>
+                      <SvgLinearGradient id="restart-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <Stop offset="0%" stopColor="#B93F4B" />
+                        <Stop offset="100%" stopColor="#451268" />
+                      </SvgLinearGradient>
+                    </Defs>
+                    {/* Restart icon rendered from asset path, using gradient stroke */}
+                    <Path d="M18.364 8.05026L17.6569 7.34315C14.5327 4.21896 9.46734 4.21896 6.34315 7.34315C3.21895 10.4673 3.21895 15.5327 6.34315 18.6569C9.46734 21.7811 14.5327 21.7811 17.6569 18.6569C19.4737 16.84 20.234 14.3668 19.9377 12.0005M18.364 8.05026H14.1213M18.364 8.05026V3.80762" fill="none" stroke="url(#restart-grad)" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" transform="translate(2,-2) scale(0.8)" />
+                    <SvgText fill="url(#restart-grad)" fontSize={14} fontWeight="800" x={30} y={14}>
+                      Restart sparkAI
+                    </SvgText>
+                  </Svg>
+                )}
+              </TouchableOpacity>
+
               <TouchableOpacity onPress={() => toggleTranslateSpark(llmResponse)} style={{ padding: 6 }}>
                 {translateSparkLoading ? (
                   <ActivityIndicator size="small" />
@@ -1881,8 +1954,18 @@ export default function Index() {
                   <MaterialCommunityIcons name="check" size={18} color="#16A34A" />
                 ) : translateSparkError ? (
                   <MaterialCommunityIcons name="alert-circle" size={18} color="#B93F4B" />
+                ) : translateSparkApplied ? (
+                  <MaterialCommunityIcons name="translate" size={20} color="#A3A3A3" />
                 ) : (
-                  <MaterialCommunityIcons name="translate" size={20} color={translateSparkApplied ? "#A3A3A3" : "#5B60FF"} />
+                  <Svg width={20} height={20} viewBox="0 0 20 20">
+                    <Defs>
+                      <SvgLinearGradient id="translate-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <Stop offset="0%" stopColor="#B93F4B" />
+                        <Stop offset="100%" stopColor="#451268" />
+                      </SvgLinearGradient>
+                    </Defs>
+                    <Path d="M7.41 9l2.24 2.24-.83 2L6 10.4l-3.3 3.3-1.4-1.42L4.58 9l-.88-.88c-.53-.53-1-1.3-1.3-2.12h2.2c.15.28.33.53.51.7l.89.9.88-.88C7.48 6.1 8 4.84 8 4H0V2h5V0h2v2h5v2h-2c0 1.37-.74 3.15-1.7 4.12L7.4 9zm3.84 8L10 20H8l5-12h2l5 12h-2l-1.25-3h-5.5zm.83-2h3.84L14 10.4 12.08 15z" fill="url(#translate-grad)" />
+                  </Svg>
                 )}
               </TouchableOpacity>
 
@@ -1890,9 +1973,25 @@ export default function Index() {
                 <MaterialCommunityIcons name="close" size={28} color="#666" />
               </TouchableOpacity>
             </View>
+            {/* Background Spark logo (decorative, non-interactive) */}
+            <Image
+              source={require("../assets/images/spark-logo.png")}
+              style={{
+                position: "absolute",
+                width: 220,
+                height: 72,
+                alignSelf: "center",
+                top: messages.length > 0 ? "3%" : "40%",
+                opacity: 0.56,
+                zIndex: 0,
+                resizeMode: "contain",
+              }}
+              pointerEvents="none"
+            />
+
             <ScrollView
               ref={scrollViewRef}
-              style={{ flex: 1, marginBottom: 16 }}
+              style={{ flex: 1, marginBottom: 16, zIndex: 1 }}
               onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
             >
               {messages.map((msg, index) => {
@@ -1908,6 +2007,8 @@ export default function Index() {
                       flexDirection: "row",
                       justifyContent: isUser ? "flex-end" : "flex-start",
                       marginBottom: 12,
+                      // Push the first message down a bit so it isn't flush with the top
+                      marginTop: index === 0 ? 50 : 0,
                     }}
                   >
                     {!isUser && (
@@ -2005,7 +2106,7 @@ export default function Index() {
                     marginBottom: 12,
                   }}
                 >
-                  <View style={{ marginRight: 8, marginTop: 4 }}>
+                  <View style={{ marginRight: 8, marginTop: 55 }}>
                     <Svg width="24" height="24" viewBox="0 0 24 24">
                       <Defs>
                         <SvgLinearGradient id="bot-gradient-loading" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -2028,6 +2129,7 @@ export default function Index() {
                       padding: 1.5,
                       maxWidth: "80%",
                       borderBottomLeftRadius: 0,
+                      marginTop: 50,
                     }}
                   >
                     <View
@@ -2035,12 +2137,27 @@ export default function Index() {
                         backgroundColor: "#F3F4F6",
                         borderRadius: 10.5,
                         padding: 12,
-                        borderBottomLeftRadius: 0,
+                        borderBottomLeftRadius: 0,                                         
                       }}
                     >
-                      <Text style={{ fontSize: 14, lineHeight: 22, color: "#333" }}>
-                        Spark AI is generating a solution{loadingDots}
-                      </Text>
+                      <Svg width="100%" height={40} viewBox="0 0 400 40">
+                        <Defs>
+                          <SvgLinearGradient id="spark-bubble-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                            <Stop offset="0%" stopColor="#B93F4B" />
+                            <Stop offset="100%" stopColor="#451268" />
+                          </SvgLinearGradient>
+                        </Defs>
+                        <SvgText
+                          fill="url(#spark-bubble-grad)"
+                          fontSize={14}
+                          fontWeight="600"
+                          x="0"
+                          y={22}
+                        >
+                          <TSpan>{`Hi, my name is Spark. I am generating now a solution for you`}</TSpan>
+                          <TSpan dx={6}>{loadingDots}</TSpan>
+                        </SvgText>
+                      </Svg>
                     </View>
                   </LinearGradient>
                 </View>
